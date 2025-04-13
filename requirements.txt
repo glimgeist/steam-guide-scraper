@@ -1,0 +1,5 @@
+requests>=2.25.0
+beautifulsoup4>=4.9.0
+html2text>=2020.1.16
+PyYAML>=5.3
+lxml>=4.6.0 # Optional but recommended for faster HTML parsing
