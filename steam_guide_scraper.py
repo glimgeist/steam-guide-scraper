@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Steam Guide Scraper.
-
-Convert Steam Community Guides to Markdown with YAML frontmatter.
-"""
+"""Convert Steam Community Guides to Markdown with YAML frontmatter."""
 
 import argparse
 from datetime import datetime
@@ -15,7 +12,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
-# Check essential dependencies early
+
 try:
     import bs4
     import html2text
@@ -29,13 +26,11 @@ except ImportError as e:
     )
     sys.exit(2)
 
-# --- Configuration ---
-
 logging.basicConfig(
     level=logging.INFO, format="%(levelname)s: %(message)s", stream=sys.stderr
 )
 
-# html2text configuration
+
 MARKDOWN_CONVERTER = html2text.HTML2Text()
 MARKDOWN_CONVERTER.body_width = 0
 MARKDOWN_CONVERTER.unicode_snob = True
@@ -46,7 +41,7 @@ MARKDOWN_CONVERTER.inline_links = True
 MARKDOWN_CONVERTER.protect_links = True
 MARKDOWN_CONVERTER.ignore_tables = False
 
-# Request Headers
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -55,51 +50,15 @@ HEADERS = {
     )
 }
 
-# Try to import lxml for faster parsing
 try:
-    import lxml
-    # Reference lxml to avoid unused import warning
-    _ = lxml
+    import lxml  # pylint: disable=unused-import
     HTML_PARSER = "lxml"
 except ImportError:
     HTML_PARSER = "html.parser"
 
-# --- Helper Functions ---
-
-# NOTE: This script relies heavily on the HTML structure and CSS selectors
-# of the Steam Community guide pages. Changes to the Steam website may
-# break the scraper, requiring updates to the selectors and parsing logic.
 
 def is_valid_steam_guide_url(url: str) -> bool:
-    """Validate if a URL is a properly formatted Steam Community Guide URL.
-
-    This function checks if a URL matches the expected format for Steam Community
-    Guides. It validates the URL structure but does not check if the guide
-    actually exists on Steam.
-
-    Args:
-        url: The URL to validate
-
-    Returns:
-        True if the URL matches the expected format for Steam Community Guides,
-        False otherwise.
-
-    The function checks for:
-    - Valid URL scheme (http:// or https://)
-    - Correct domain (steamcommunity.com)
-    - Correct path (/sharedfiles/filedetails/)
-    - Presence of an 'id' query parameter
-
-    Examples:
-        Valid URLs:
-        - https://steamcommunity.com/sharedfiles/filedetails/?id=2008348525
-        - http://steamcommunity.com/sharedfiles/filedetails/?id=2008348525
-
-        Invalid URLs:
-        - https://steamcommunity.com/ (wrong path)
-        - https://example.com/sharedfiles/filedetails/?id=2008348525 (wrong domain)
-        - https://steamcommunity.com/sharedfiles/filedetails/ (missing id)
-    """
+    """Check URL has valid scheme, steamcommunity.com domain, correct path, and 'id' param."""
     try:
         parsed = urlparse(url)
         is_valid = (
@@ -117,31 +76,9 @@ def is_valid_steam_guide_url(url: str) -> bool:
 
 
 def get_guide_id_from_url(url: str) -> Optional[str]:
-    """Extract the guide ID from a Steam Community Guide URL.
+    """Extract the numeric guide ID from a Steam guide URL's query params.
 
-    This function parses a Steam Community Guide URL and extracts the numeric
-    guide ID from the query parameters. It handles various URL formats and
-    includes error handling for malformed URLs.
-
-    Args:
-        url: A Steam Community Guide URL containing a guide ID
-
-    Returns:
-        The extracted guide ID as a string, or None if:
-        - The URL is malformed
-        - The 'id' parameter is missing
-        - The 'id' parameter is not numeric
-
-    Examples:
-        Input: "https://steamcommunity.com/sharedfiles/filedetails/?id=2008348525"
-        Output: "2008348525"
-
-        Input: "https://steamcommunity.com/sharedfiles/filedetails/"
-        Output: None
-
-    Note:
-        This function assumes the URL is already validated as a Steam Community
-        Guide URL. For validation, use is_valid_steam_guide_url() first.
+    Returns the ID string, or None if missing/non-numeric.
     """
     try:
         parsed = urlparse(url)
@@ -157,54 +94,14 @@ def get_guide_id_from_url(url: str) -> Optional[str]:
 def safe_get_text(
     element: Optional[bs4.Tag], strip: bool = True, separator: str = " "
 ) -> Optional[str]:
-    """Safely extract text content from a BeautifulSoup element.
-
-    This utility function handles the common case of extracting text from
-    BeautifulSoup elements while gracefully handling None values and
-    providing options for text formatting.
-
-    Args:
-        element: A BeautifulSoup Tag element, or None
-        strip: Whether to strip whitespace from the result (default: True)
-        separator: String to use when joining multiple text nodes (default: ' ')
-
-    Returns:
-        The extracted text as a string, or None if:
-        - The element is None
-        - The element has no text content
-
-    This function is a safe alternative to directly calling get_text()
-    on elements that might be None, preventing AttributeError exceptions.
-    """
+    """Extract text from a BeautifulSoup element, returning None if element is None."""
     return element.get_text(strip=strip, separator=separator) if element else None
 
 
 def safe_get_number(text: Optional[str]) -> Optional[int]:
-    """Extract the first integer from a string, handling various formats.
+    """Extract an integer from a string by stripping non-digit characters.
 
-    This utility function extracts numeric values from strings that might
-    contain additional text or formatting. It's useful for parsing Steam's
-    various numeric statistics that are often displayed with labels or
-    formatting.
-
-    Args:
-        text: A string potentially containing a number, or None
-
-    Returns:
-        The first integer found in the string, or None if:
-        - The input is None
-        - No numeric value is found
-        - The numeric value cannot be converted to an integer
-
-    Examples:
-        Input: "1,234 ratings"
-        Output: 1234
-
-        Input: "Favorite (5)"
-        Output: 5
-
-        Input: "No ratings yet"
-        Output: None
+    Returns None if input is None or contains no digits.
     """
     if not text:
         return None
@@ -216,41 +113,21 @@ def safe_get_number(text: Optional[str]) -> Optional[int]:
 
 
 def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
-    """Parse Steam's date format into a standardized YYYY-MM-DD string.
+    """Parse Steam's various date formats into YYYY-MM-DD.
 
-    This function handles various date formats used by Steam Community Guides,
-    converting them to a consistent YYYY-MM-DD format. It includes support for
-    multiple date formats and handles edge cases like missing years.
-
-    Args:
-        date_str: A string containing a date in Steam's format, or None
-
-    Returns:
-        A string in YYYY-MM-DD format, or None if parsing fails.
-
-    Supported Formats (Case-insensitive):
-    - "Feb 27, 2020 @ 12:10am"
-    - "Apr 11, 2022 @ 12:50pm"
-    - "10 Jul, 2024 @ 2:07am"
-    - "Oct 26, 2023 @ 5:01pm"
-    - "6 Apr @ 6:28pm" (Assumes current year)
-    - "Feb 27, 2020" (Date only)
+    Handles formats like "Feb 27, 2020 @ 12:10am", "10 Jul, 2024 @ 2:07am",
+    and "6 Apr @ 6:28pm" (assumes current year). Returns None on failure.
     """
     if not date_str:
         return None
     date_str = date_str.strip()
 
-    # Define patterns and their corresponding strptime formats
-    # Order matters: More specific patterns first
+    # More specific patterns first
     patterns = [
-        # Format: Month Day, Year @ Time (e.g., "Feb 27, 2020 @ 12:10am")
-        (r"([A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s+@.*", "%b %d, %Y"),
-        # Format: Day Month, Year @ Time (e.g., "10 Jul, 2024 @ 2:07am")
-        (r"(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})\s+@.*", "%d %b, %Y"),
-        # Format: Month Day, Year (Date only)
-        (r"^([A-Za-z]{3}\s+\d{1,2},\s+\d{4})$", "%b %d, %Y"),
-        # Format: Day Month, Year (Date only)
-        (r"^(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})$", "%d %b, %Y"),
+        (r"([A-Za-z]{3}\s+\d{1,2},\s+\d{4})\s+@.*", "%b %d, %Y"),        # "Feb 27, 2020 @ ..."
+        (r"(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})\s+@.*", "%d %b, %Y"),        # "10 Jul, 2024 @ ..."
+        (r"^([A-Za-z]{3}\s+\d{1,2},\s+\d{4})$", "%b %d, %Y"),            # "Feb 27, 2020"
+        (r"^(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})$", "%d %b, %Y"),            # "10 Jul, 2024"
     ]
 
     for pattern, date_format in patterns:
@@ -267,9 +144,8 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
                     date_format,
                     e,
                 )
-                # Continue to next pattern if this one fails
 
-    # Format: Day Mon @ time (e.g., "6 Apr @ 6:28pm", assume current year)
+    # Day Mon @ time without year (e.g., "6 Apr @ 6:28pm") — assume current year
     no_year_pattern_time = re.compile(
         r"^(\d{1,2}\s+[A-Za-z]{3})\s+@\s+\d{1,2}:\d{2}(?:am|pm)$", re.IGNORECASE
     )
@@ -278,7 +154,7 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
         date_part_no_year = match_no_year_time.group(1)
         current_year = datetime.now().year
         date_with_year = f"{date_part_no_year}, {current_year}"
-        # Determine format based on whether day or month comes first
+
         day_first_match = re.match(r"^\d{1,2}", date_part_no_year)
         date_format = "%d %b, %Y" if day_first_match else "%b %d, %Y"
         try:
@@ -304,36 +180,19 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
     return None
 
 
-# --- Core Scraping Logic ---
-
-
 def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[str]:
-    """Fetch HTML content from the given URL with retries.
+    """Fetch HTML content from a URL with retry and exponential backoff.
 
-    Args:
-        url: The URL to fetch.
-        retries: Number of times to retry on network errors (0 means 1 attempt).
-        timeout: Request timeout in seconds.
-
-    Returns:
-        HTML content as string or None if fetching fails after retries.
+    Returns HTML string or None on failure.
     """
-    logging.debug(
-        "Fetching: %s (Timeout: %ss, Retries: %s)",
-        url,
-        timeout,
-        retries,
-    )
+    logging.debug("Fetching: %s (Timeout: %ss, Retries: %s)", url, timeout, retries)
     last_exception = None
     for attempt in range(retries + 1):
         try:
             response = requests.get(url, headers=HEADERS, timeout=timeout)
             logging.debug(
                 "Attempt %s/%s: Status %s for %s",
-                attempt + 1,
-                retries + 1,
-                response.status_code,
-                url,
+                attempt + 1, retries + 1, response.status_code, url,
             )
             response.raise_for_status()
             response.encoding = response.apparent_encoding or "utf-8"
@@ -343,10 +202,7 @@ def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[st
             last_exception = e
             logging.warning(
                 "Attempt %s/%s failed for %s: %s",
-                attempt + 1,
-                retries + 1,
-                url,
-                e,
+                attempt + 1, retries + 1, url, e,
             )
             if attempt < retries:
                 sleep_time = min(10.0, (1.5 ** attempt) + random.uniform(0.1, 0.5))
@@ -355,15 +211,12 @@ def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[st
             else:
                 logging.error(
                     "Fetching finally failed after %s attempts for URL %s.",
-                    retries + 1,
-                    url,
+                    retries + 1, url,
                 )
         except (LookupError, ValueError, TypeError, AttributeError) as e:
             logging.error(
                 "Unexpected error during request/encoding for %s on attempt %s: %s",
-                url,
-                attempt + 1,
-                e,
+                url, attempt + 1, e,
             )
             last_exception = e
             break
@@ -378,14 +231,10 @@ def parse_and_clean_soup(html_content: str) -> Optional[bs4.BeautifulSoup]:
     logging.debug("Parsing HTML content...")
     try:
         soup = bs4.BeautifulSoup(html_content, HTML_PARSER)
-        logging.debug("HTML parsing successful using '%s'.", HTML_PARSER)
-        # Remove scripts, styles, and comments
         for element in soup(["script", "style"]):
             element.decompose()
-        comments = soup.find_all(string=lambda text: isinstance(text, bs4.Comment))
-        for comment in comments:
+        for comment in soup.find_all(string=lambda text: isinstance(text, bs4.Comment)):
             comment.extract()
-        logging.debug("Removed script/style tags and comments.")
         return soup
     except (ValueError, TypeError, AttributeError) as e:
         logging.error("Failed to parse HTML: %s", e)
@@ -394,57 +243,40 @@ def parse_and_clean_soup(html_content: str) -> Optional[bs4.BeautifulSoup]:
 
 def _extract_game_id(soup: bs4.BeautifulSoup, guide_id: Optional[str]) -> Optional[Union[int, str]]:
     """Extract the Steam App ID from the guide page."""
-    log_prefix = f"[Game ID Extraction (Guide {guide_id or 'N/A'})]"
+    log_prefix = f"[Game ID (Guide {guide_id or 'N/A'})]"
 
-    # 1. Try input[name="appid"]
+    # Method 1: input[name="appid"]
     appid_inputs = soup.select('input[name="appid"]')
     for input_elem in appid_inputs:
         val = input_elem.get("value")
         if val and val.isdigit():
-            logging.debug(
-                "%s Success (Method 1): Found game_id '%s'.",
-                log_prefix,
-                val,
-            )
+            logging.debug("%s Found via input[name=appid]: '%s'.", log_prefix, val)
             return int(val)
 
-    # 2. Try store button link
+    # Method 2: store button link
     store_button = soup.select_one('a.btnv6_blue_hoverfade[data-appid][href*="/app/"]')
     if store_button:
         data_appid = store_button.get('data-appid')
         if data_appid and data_appid.isdigit():
-            logging.debug(
-                "%s Success (Method 2): Found game_id '%s'.",
-                log_prefix,
-                data_appid,
-            )
+            logging.debug("%s Found via store button data-appid: '%s'.", log_prefix, data_appid)
             return int(data_appid)
 
         href = store_button.get('href')
         if href:
             match = re.search(r"/app/(\d+)", href)
             if match:
-                logging.debug(
-                    "%s Success (Method 2 fallback): Found game_id '%s'.",
-                    log_prefix,
-                    match.group(1),
-                )
+                logging.debug("%s Found via store button href: '%s'.", log_prefix, match.group(1))
                 return int(match.group(1))
 
-    # 3. Try guide link
+    # Method 3: guide link data-appid
     any_guide_link = soup.select_one('a.workshopItemCollection[data-appid]')
     if any_guide_link:
         data_appid = any_guide_link.get('data-appid')
         if data_appid and data_appid.isdigit():
-            logging.debug(
-                "%s Success (Method 3): Found game_id '%s'.",
-                log_prefix,
-                data_appid,
-            )
+            logging.debug("%s Found via guide link data-appid: '%s'.", log_prefix, data_appid)
             return int(data_appid)
 
-    # 4. Try JS variables
-    logging.debug("%s Trying Method 4: JS variables.", log_prefix)
+    # Method 4: JS variables
     html_content = str(soup)
     patterns = [
         r"g_steamIDAppID\s*=\s*['\"]?(\d+)['\"]?",
@@ -454,18 +286,14 @@ def _extract_game_id(soup: bs4.BeautifulSoup, guide_id: Optional[str]) -> Option
     for pattern in patterns:
         match = re.search(pattern, html_content)
         if match and match.group(1):
-            logging.debug(
-                "%s Success (Method 4): Found game_id '%s'.",
-                log_prefix,
-                match.group(1),
-            )
+            logging.debug("%s Found via JS variable: '%s'.", log_prefix, match.group(1))
             return int(match.group(1))
 
     logging.warning("%s FAILED: Could not determine Game ID.", log_prefix)
     return None
 
 def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
-    """Extract the author list and fallback author string."""
+    """Extract author usernames from the creators block, with fallback to .guideAuthors."""
     authors = []
     created_by_section = soup.select_one(".rightDetailsBlock .creatorsBlock")
     if created_by_section:
@@ -479,15 +307,14 @@ def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
     if authors:
         return authors, ", ".join(authors)
 
-    # Fallback to old method
+    # Fallback
     author_elem = soup.select_one(".guideAuthors")
     author_text = safe_get_text(author_elem)
     author_str = author_text.replace("By ", "").strip() if author_text else "Unknown Author"
     return [author_str], author_str
 
-
 def _extract_tags_and_languages(soup: bs4.BeautifulSoup) -> Tuple[Any, Any]:
-    """Extract categories and languages tags."""
+    """Extract category and language tags from the right details block."""
     categories, languages = [], []
     for tag_elem in soup.select(".rightDetailsBlock .workshopTags"):
         title_span = tag_elem.select_one(".workshopTagsTitle")
@@ -576,50 +403,10 @@ def _extract_statistics(soup: bs4.BeautifulSoup) -> Tuple[int, int, int, int, in
 def extract_metadata(
     soup: bs4.BeautifulSoup, guide_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Extract metadata from a Steam Community Guide page.
+    """Extract all metadata from a Steam guide page into a dictionary.
 
-    This function parses the HTML of a Steam Community Guide page and extracts
-    all available metadata into a structured dictionary. The metadata includes
-    information about the guide, its authors, the associated game, and various
-    statistics.
-
-    Args:
-        soup: A BeautifulSoup object containing the parsed HTML of the guide page
-        guide_id: Optional guide ID to include in the metadata. If not provided,
-                 it will be extracted from the page if possible.
-
-    Returns:
-        A dictionary containing all extracted metadata fields. The dictionary
-        includes the following fields (all fields are optional and may be None
-        if not found):
-
-        Basic Information:
-        - guide_id: The unique identifier for the guide (as int if possible)
-        - guide_title: The title of the guide
-        - game_title: The title of the associated game
-        - game_id: The Steam App ID of the associated game (as string)
-
-        Author Information:
-        - authors: List of all authors' names
-
-        Dates:
-        - post_date: The date the guide was originally posted (YYYY-MM-DD)
-        - update_date: The date the guide was last updated (YYYY-MM-DD)
-
-        Statistics:
-        - rating: The guide's star rating (0-5)
-        - num_ratings: The number of ratings received
-        - unique_visitors: The number of unique visitors
-        - current_favorites: The number of current favorites
-        - comments: The number of comments
-
-        Classification:
-        - category: The guide's category/categories (string or list)
-        - languages: List of languages the guide is available in (string or list)
-
-    The function uses multiple methods to extract each piece of metadata,
-    with fallback strategies when the primary method fails. It includes
-    extensive error handling and logging to help diagnose extraction issues.
+    Includes guide/game info, authors, dates, ratings, visitors, favorites,
+    comments, and category/language tags.
     """
     logging.debug("Extracting metadata...")
     metadata = {}
@@ -653,69 +440,22 @@ def extract_metadata(
 
 
 def generate_frontmatter(metadata: Dict[str, Any]) -> str:
-    """Generate YAML frontmatter from metadata dictionary.
+    """Generate YAML frontmatter from metadata, excluding 'author' and 'languages' keys.
 
-    This function converts a dictionary of metadata into a YAML-formatted
-    string suitable for use as frontmatter in Markdown files. It handles
-    various data types and includes error handling for invalid data. It excludes
-    the redundant 'author' field.
-
-    Args:
-        metadata: A dictionary containing guide metadata. Keys should be
-                 strings, and values can be strings, numbers, lists, or None.
-                 Common keys include:
-                 - guide_id, guide_title, game_title, game_id
-                 - authors, post_date, update_date
-                 - rating, num_ratings, unique_visitors
-                 - current_favorites, comments, category, languages
-
-    Returns:
-        A string containing the YAML frontmatter, wrapped in '---' markers.
-        The string will be empty if there's an error generating the YAML.
-
-    The generated YAML will:
-    - Preserve Unicode characters
-    - Use block style for lists and dictionaries
-    - Sort keys alphabetically (by default, override if needed)
-    - Handle None values appropriately (represented as null or empty)
-    - Exclude the 'author' field.
-
-    Example output:
-        ---
-        authors:
-        - paperrabbit
-        category: Walkthroughs
-        comments: 66
-        current_favorites: 197
-        game_id: '913740'
-        game_title: WORLD OF HORROR
-        guide_id: 2008348525 # Note: guide_id is now numeric
-        guide_title: Events Codex
-        languages: English
-        num_ratings: 97
-        post_date: '2020-02-27'
-        rating: 4
-        unique_visitors: 6269
-        update_date: '2022-04-11'
-        ---
+    Returns a YAML block wrapped in '---' markers, or empty string on error.
     """
     try:
-        # Create a copy to avoid modifying the original dict
         metadata_to_dump = metadata.copy()
-        # Remove the 'author' and 'languages' keys if they exist before dumping
         metadata_to_dump.pop('author', None)
         metadata_to_dump.pop('languages', None)
 
-        # Optional: Define the desired order of keys for consistent output
-        # Remove 'languages' from the desired order
         key_order = [
             'game_id', 'game_title', 'guide_id', 'guide_title', 'authors',
             'post_date', 'update_date', 'category', 'rating', 'num_ratings',
-            'unique_visitors', 'current_favorites', 'comments' # Removed 'languages'
+            'unique_visitors', 'current_favorites', 'comments'
         ]
-        # Sort the dictionary based on the desired key order
         sorted_metadata = {k: metadata_to_dump[k] for k in key_order if k in metadata_to_dump}
-        # Add any remaining keys not in the order list (maintains them alphabetically)
+
         for k in sorted(metadata_to_dump.keys()):
             if k not in sorted_metadata:
                 sorted_metadata[k] = metadata_to_dump[k]
@@ -731,30 +471,7 @@ def generate_frontmatter(metadata: Dict[str, Any]) -> str:
 
 
 def extract_title(soup: bs4.BeautifulSoup) -> Tuple[str, str]:
-    """Extract and format the guide title from the HTML.
-
-    This function extracts the guide's title from the HTML and formats it
-    as both a plain string and a Markdown H1 heading. It includes fallback
-    behavior for cases where the title cannot be found.
-
-    Args:
-        soup: A BeautifulSoup object containing the parsed guide HTML
-
-    Returns:
-        A tuple containing:
-        1. The plain title text (or "Untitled Guide" if not found)
-        2. The title formatted as a Markdown H1 heading
-
-    The function:
-    - Looks for the title in the .workshopItemTitle element
-    - Strips any leading/trailing whitespace
-    - Formats the title as a Markdown H1 heading (# Title)
-    - Provides a default value if the title cannot be found
-
-    Example:
-        Input HTML: <div class="workshopItemTitle">My Guide Title</div>
-        Returns: ("My Guide Title", "# My Guide Title\n\n")
-    """
+    """Extract guide title as (plain_text, markdown_h1) tuple."""
     title_element = soup.select_one(".workshopItemTitle")
     guide_title = safe_get_text(title_element) or "Untitled Guide"
     title_markdown = f"# {guide_title}\n\n"
@@ -762,33 +479,9 @@ def extract_title(soup: bs4.BeautifulSoup) -> Tuple[str, str]:
 
 
 def extract_description(soup: bs4.BeautifulSoup) -> str:
-    """Extract and convert the guide description to Markdown.
+    """Extract the guide description and convert to Markdown.
 
-    This function processes the guide's description section, handling Steam's
-    custom HTML formatting and converting it to clean Markdown. It includes
-    special handling for various HTML elements and formatting.
-
-    Args:
-        soup: A BeautifulSoup object containing the parsed guide HTML
-
-    Returns:
-        A string containing the description in Markdown format, or an empty
-        string if no description is found or if conversion fails.
-
-    The function:
-    1. Locates the description in the .guideTopDescription element
-    2. Cleans up the HTML by:
-       - Removing link host spans
-       - Ensuring images have proper alt text
-       - Handling Steam's custom formatting
-    3. Converts the cleaned HTML to Markdown
-    4. Adds appropriate spacing and formatting
-
-    The resulting Markdown will:
-    - Preserve links and images
-    - Maintain basic formatting (bold, italic, lists)
-    - Include proper spacing between elements
-    - Handle nested HTML structures appropriately
+    Returns empty string if no description found or conversion fails.
     """
     desc_element = soup.select_one(".guideTopDescription")
     if not desc_element:
@@ -796,7 +489,6 @@ def extract_description(soup: bs4.BeautifulSoup) -> str:
         return ""
 
     try:
-        # Create a temporary soup for description cleanup
         desc_html = desc_element.decode_contents()
         temp_soup_desc = bs4.BeautifulSoup(desc_html, HTML_PARSER)
 
@@ -810,7 +502,6 @@ def extract_description(soup: bs4.BeautifulSoup) -> str:
                 img.get("alt", "").strip() or img.get("title", "").strip() or "Image"
             )
             img["alt"] = alt_text
-            # Remove title if it's the same as alt to avoid redundancy in Markdown
             if "title" in img.attrs and img["alt"] == img["title"]:
                 del img["title"]
 
@@ -829,61 +520,24 @@ def extract_description(soup: bs4.BeautifulSoup) -> str:
 
 
 def _preprocess_html_element(element: bs4.Tag, soup_instance: bs4.BeautifulSoup):
-    """Preprocess an HTML element before Markdown conversion.
-
-    This internal function applies a series of transformations to an HTML
-    element to prepare it for conversion to Markdown. It handles Steam's
-    custom HTML formatting and converts it to more standard HTML that
-    can be better converted to Markdown.
-
-    Args:
-        element: The BeautifulSoup Tag element to preprocess
-        soup_instance: The BeautifulSoup instance used to create new tags
-
-    The preprocessing steps include:
-    1. Link handling:
-       - Removing link host spans
-       - Preserving link text and URLs
-    2. Image processing:
-       - Ensuring images have proper alt text
-       - Removing redundant title attributes
-    3. Heading conversion:
-       - Converting Steam's custom heading divs to standard HTML headings
-       - Preserving heading hierarchy
-    4. List standardization:
-       - Removing custom list classes
-       - Ensuring proper list structure
-    5. Code block handling:
-       - Converting Steam's code blocks to standard <pre> tags
-       - Preserving code formatting
-    6. Table conversion:
-       - Converting Steam's custom table divs to standard HTML tables
-       - Preserving table structure and content
-    7. Cleanup:
-       - Removing unnecessary divs
-       - Cleaning up whitespace
-
-    This function modifies the element in place and does not return a value.
-    """
+    """Transform Steam's custom HTML (BBCode divs, tables, etc.) into standard HTML in-place."""
     logging.debug("Preprocessing HTML element...")
 
     # Remove bb_link_host spans
     for link_host_span in element.find_all("span", class_="bb_link_host"):
         link_host_span.decompose()
 
-    # Pre-process images (ensure alt text)
     for img in element.find_all("img"):
         alt_text = img.get("alt", "").strip() or img.get("title", "").strip()
         src = img.get("src", "")
         if not alt_text:
             filename = urlparse(src).path.split("/")[-1] if src else ""
-            alt_text = f"{filename}" if filename else "Image"
+            alt_text = filename if filename else "Image"
         img["alt"] = alt_text
-        # Remove title if it's the same as alt
+
         if "title" in img.attrs and img["alt"] == img["title"]:
             del img["title"]
 
-    # Convert Steam BBCode divs to standard HTML tags
     tag_conversions = {
         "bb_h1": "h2",
         "bb_h3": "h4",
@@ -898,34 +552,24 @@ def _preprocess_html_element(element: bs4.Tag, soup_instance: bs4.BeautifulSoup)
             new_tag = soup_instance.new_tag(html_tag)
             new_tag.string = text
             div.replace_with(new_tag)
-            logging.debug(
-                "Converted %s to %s: %s...",
-                bb_class,
-                html_tag,
-                text[:50],
-            )
+            logging.debug("Converted %s to %s: %s...", bb_class, html_tag, text[:50])
 
-    # Standardize lists (remove bb_ classes)
     for list_tag in element.find_all(["ul", "ol"]):
         list_tag.attrs = {}
 
-    # Convert bb_code blocks to <pre>
     for bb_code in element.find_all("div", class_="bb_code"):
         pre_tag = bb_code.find("pre")
         if pre_tag:
-            bb_code.replace_with(pre_tag)  # Use existing <pre>
+            bb_code.replace_with(pre_tag)
         else:
-            # Create new <pre> and preserve raw content
             new_pre = soup_instance.new_tag("pre")
             raw_content = bb_code.decode_contents(formatter=None).strip()
             new_pre.string = raw_content
             bb_code.replace_with(new_pre)
 
-    # Convert div-based tables (bb_table) to standard HTML tables
     for bb_table_div in element.find_all("div", class_="bb_table"):
         _convert_bb_table_to_html(bb_table_div, soup_instance)
 
-    # Remove clear:both divs
     for clear_div in element.find_all("div", style="clear: both"):
         clear_div.decompose()
 
@@ -933,58 +577,31 @@ def _preprocess_html_element(element: bs4.Tag, soup_instance: bs4.BeautifulSoup)
 
 
 def _convert_bb_table_to_html(bb_table_div: bs4.Tag, soup_instance: bs4.BeautifulSoup):
-    """Convert Steam's custom table div structure to standard HTML table.
-
-    This internal function converts Steam's custom div-based table structure
-    to a standard HTML table element. It handles various table formats and
-    preserves the table's structure, content, and formatting.
-
-    Args:
-        bb_table_div: The BeautifulSoup Tag containing the Steam table div
-        soup_instance: The BeautifulSoup instance used to create new tags
-
-    The conversion process:
-    1. Checks for existing standard table (uses it if found)
-    2. Identifies table rows and cells
-    3. Determines header row (if present)
-    4. Creates standard HTML table structure:
-       - <table>, <thead>, <tbody>, <tr>, <th>, <td>
-    5. Preserves cell content and formatting
-    6. Handles edge cases:
-       - Empty rows
-       - Mixed header/data cells
-       - Nested content
-
-    This function modifies the bb_table_div in place, replacing it with
-    a standard HTML table structure.
-    """
+    """Convert Steam's div-based table (.bb_table) to a standard HTML table in-place."""
     logging.debug("Processing bb_table div...")
 
-    # If a standard <table> already exists inside, use it directly
+
     std_table = bb_table_div.find("table", recursive=False)
     if std_table:
         logging.debug("Found standard table inside bb_table. Replacing div.")
         bb_table_div.replace_with(std_table)
         return
 
-    # Find direct child rows (.bb_table_tr)
+
     row_divs = bb_table_div.find_all("div", class_="bb_table_tr", recursive=False)
     if not row_divs:
         logging.warning(
             "bb_table div found but contains no .bb_table_tr rows. Skipping conversion."
         )
-        bb_table_div.decompose()  # Remove the empty table structure
+        bb_table_div.decompose()
         return
 
-    logging.debug(
-        "Found div-based table structure with %s rows. Converting...",
-        len(row_divs),
-    )
+    logging.debug("Converting div-based table with %s rows...", len(row_divs))
     new_table = soup_instance.new_tag("table")
     tbody = soup_instance.new_tag("tbody")
     thead = None
 
-    # Check if the first row is a header row (contains .bb_table_th)
+
     first_row_cells = row_divs[0].find_all(
         "div", class_=lambda c: c in ("bb_table_td", "bb_table_th"), recursive=False
     )
@@ -996,7 +613,7 @@ def _convert_bb_table_to_html(bb_table_div: bs4.Tag, soup_instance: bs4.Beautifu
         logging.debug("First row identified as header.")
         thead = soup_instance.new_tag("thead")
         new_table.append(thead)
-        header_row_div = row_divs.pop(0)  # Remove header row from list
+        header_row_div = row_divs.pop(0)
         new_header_row = soup_instance.new_tag("tr")
         header_cells_divs = header_row_div.find_all(
             "div", class_=lambda c: c in ("bb_table_td", "bb_table_th"), recursive=False
@@ -1007,8 +624,7 @@ def _convert_bb_table_to_html(bb_table_div: bs4.Tag, soup_instance: bs4.Beautifu
             new_header_row.append(new_cell)
         thead.append(new_header_row)
 
-    # Process remaining rows as data rows (or all rows if no header)
-    if row_divs:  # Check if there are data rows left
+    if row_divs:
         new_table.append(tbody)
         for row_div in row_divs:
             new_data_row = soup_instance.new_tag("tr")
@@ -1018,69 +634,32 @@ def _convert_bb_table_to_html(bb_table_div: bs4.Tag, soup_instance: bs4.Beautifu
                 recursive=False,
             )
             if not data_cells_divs:
-                continue  # Skip empty rows
+                continue
             for cell_div in data_cells_divs:
                 new_cell = soup_instance.new_tag("td")
                 new_cell.extend(cell_div.contents)
                 new_data_row.append(new_cell)
             tbody.append(new_data_row)
 
-    # Replace the original bb_table div with the new standard table
+
     bb_table_div.replace_with(new_table)
     logging.debug("Finished converting table.")
 
 
 def process_main_content(soup: bs4.BeautifulSoup) -> str:
-    """Process the main content of the guide and convert it to Markdown.
+    """Extract the main guide content from div.guide.subSections and convert to Markdown.
 
-    This function handles the core content of the Steam guide, converting
-    Steam's custom HTML formatting to clean Markdown while preserving the
-    structure and formatting of the original content.
-
-    Args:
-        soup: A BeautifulSoup object containing the parsed guide HTML
-
-    Returns:
-        A string containing the main content in Markdown format, or an empty
-        string if the content cannot be found or processed.
-
-    The function:
-    1. Locates the main content in the .guide.subSections element
-    2. Applies preprocessing to handle Steam's custom formatting:
-       - Converts Steam's BBCode-like divs to standard HTML
-       - Processes tables and code blocks
-       - Handles images and links
-       - Manages lists and headings
-    3. Converts the processed HTML to Markdown
-    4. Applies final cleanup to ensure consistent formatting
-
-    The resulting Markdown will:
-    - Preserve the original content structure
-    - Convert Steam's custom formatting to standard Markdown
-    - Handle complex elements like tables and code blocks
-    - Maintain proper heading hierarchy
-    - Include appropriate spacing and formatting
-
-    Note:
-        This function relies on the html2text converter configured at the
-        module level (MARKDOWN_CONVERTER) for the actual HTML-to-Markdown
-        conversion.
+    Returns empty string if content area not found or conversion fails.
     """
     main_content_selector = "div.guide.subSections"
-    logging.debug(
-        "Attempting to find main content container: '%s'",
-        main_content_selector,
-    )
     main_content_container = soup.select_one(main_content_selector)
 
     if not main_content_container:
         logging.error("Could not find the main guide content container.")
-        return ""  # Return empty string if content area not found
+        return ""
 
-    # Preprocess the HTML within the container
     _preprocess_html_element(main_content_container, soup)
 
-    # Get the processed HTML string
     main_content_html = main_content_container.decode_contents()
 
     if not main_content_html.strip():
@@ -1089,124 +668,55 @@ def process_main_content(soup: bs4.BeautifulSoup) -> str:
         )
         return ""
 
-    # Convert the processed HTML to Markdown
-    logging.debug("Converting main content HTML to Markdown...")
+
     try:
         main_content_markdown = MARKDOWN_CONVERTER.handle(main_content_html).strip()
         logging.debug("Main content conversion successful.")
         return main_content_markdown
     except (ValueError, TypeError, AttributeError, LookupError) as e:
         logging.error("Error during main content conversion: %s", e)
-        return ""  # Return empty on conversion error
+        return ""
 
 
 def final_markdown_cleanup(markdown: str) -> str:
-    """Apply final cleanup operations to the generated Markdown.
+    """Normalize whitespace, fix heading formatting, and remove empty headings."""
+    markdown = re.sub(r"\n\s*\n", "\n\n", markdown)
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
 
-    This function performs a series of cleanup operations on the Markdown
-    to ensure consistent formatting and remove any artifacts from the
-    HTML-to-Markdown conversion process.
-
-    Args:
-        markdown: The Markdown string to clean up
-
-    Returns:
-        A cleaned-up version of the input Markdown string
-
-    The cleanup operations include:
-    1. Collapsing excessive newlines:
-       - Multiple blank lines -> two newlines
-       - Lines with only spaces -> single newline
-    2. Fixing heading formatting:
-       - Ensuring space after # markers
-       - Removing extra spaces in headings
-       - Removing empty headings
-    3. Removing trailing whitespace from lines
-    4. Ensuring consistent spacing around elements
-
-    The goal is to produce clean, consistent Markdown that:
-    - Is easy to read in source form
-    - Renders correctly in Markdown viewers
-    - Follows common Markdown style conventions
-    - Has minimal unnecessary whitespace
-    """
-    logging.debug("Performing final Markdown cleanup...")
-    # Collapse excessive newlines (more robust)
-    markdown = re.sub(r"\n\s*\n", "\n\n", markdown)  # Blanks lines with spaces
-    markdown = re.sub(r"\n{3,}", "\n\n", markdown)  # 3+ newlines -> 2
-
-    # Ensure space after heading markers (e.g., #Heading)
-    # Handles optional bold/italic markers immediately after #
     markdown = re.sub(
         r"^(#+)(\*?_?)([^\s#*_].*)", r"\1 \2\3", markdown, flags=re.MULTILINE
     )
-    # Reduce multiple spaces after heading marker (e.g., #   Heading)
     markdown = re.sub(r"^(#+)\s{2,}(.*)", r"\1 \2", markdown, flags=re.MULTILINE)
 
-    # Remove trailing whitespace from lines
     markdown = re.sub(r" +\n", "\n", markdown)
-
-    # Remove empty headings (e.g., ### on a line by itself)
     markdown = re.sub(r"^#+\s*$", "", markdown, flags=re.MULTILINE)
-    # Collapse newlines again after removing empty headings
+
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
 
-    return markdown.strip()  # Return stripped final result
+    return markdown.strip()
 
 
 def scrape_steam_guide(
     url: str, retries: int = 1, timeout: float = 30.0
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Scrape a Steam Community Guide and convert it to Markdown.
+    """Scrape a single Steam guide and return (markdown_content, guide_id).
 
-    This is the core function that handles the entire scraping process for a single guide.
-    It fetches the guide's HTML, extracts metadata and content, and converts everything
-    to a well-formatted Markdown file with YAML frontmatter.
-
-    Args:
-        url: The Steam Community Guide URL to scrape. This can be either a full URL
-             or a numeric guide ID (which will be converted to a URL).
-        retries: Number of times to retry on network errors (0 means 1 attempt).
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A tuple containing:
-        - The complete Markdown content as a string, or None if scraping failed
-        - The guide ID as a string, or None if it couldn't be extracted
-
-    The function performs the following steps:
-    1. Validates the input URL and extracts the guide ID
-    2. Fetches the guide's HTML content
-    3. Parses and cleans the HTML
-    4. Extracts all available metadata
-    5. Converts the content to Markdown
-    6. Combines everything into a single Markdown document with YAML frontmatter
-
-    Error Handling:
-    - Invalid URLs are logged and return (None, None)
-    - Network errors are caught and logged
-    - Parsing errors are caught and logged
-    - If content extraction fails, the function will return partial results
-      (frontmatter and title) if available
-
-    The function includes extensive logging to help diagnose issues.
+    Returns (None, guide_id) on failure. Falls back to partial content
+    (frontmatter + title + description) if main content extraction fails.
     """
 
     guide_id = get_guide_id_from_url(url)
     if not is_valid_steam_guide_url(url):
         logging.error("Invalid Steam Community Guide URL format: %s", url)
-        return (
-            None,
-            guide_id,
-        )  # Return ID even if URL is invalid for potential filename use
+        return None, guide_id
 
     html_content = fetch_html(url, retries=retries, timeout=timeout)
     if not html_content:
-        return None, guide_id  # Error already logged in fetch_html
+        return None, guide_id
 
     soup = parse_and_clean_soup(html_content)
     if not soup:
-        return None, guide_id  # Error already logged in parse_and_clean_soup
+        return None, guide_id
 
     metadata = extract_metadata(soup, guide_id)
     yaml_frontmatter = generate_frontmatter(metadata)
@@ -1214,27 +724,19 @@ def scrape_steam_guide(
     description_markdown = extract_description(soup)
     main_content_markdown = process_main_content(soup)
 
-    # Combine the parts
     combined_markdown = (
         yaml_frontmatter + title_markdown + description_markdown + main_content_markdown
     )
 
-    # Final cleanup
     final_markdown = final_markdown_cleanup(combined_markdown)
 
-    # Check if the result is meaningful (more than just headers/empty content)
-    # Consider base length slightly differently, frontmatter might be empty on error
-    base_length_estimate = (
-        len(title_markdown) + len(description_markdown) + 50
-    )  # Base + buffer
+    # Check if result has meaningful content beyond title/description
+    base_length_estimate = len(title_markdown) + len(description_markdown) + 50
     if (
         len(final_markdown) <= base_length_estimate
         and not main_content_markdown.strip()
     ):
-        logging.warning(
-            "Resulting markdown appears empty or contains only title/description."
-        )
-        # Return title/desc if available and main content failed, otherwise None
+        logging.warning("Markdown appears empty or contains only title/description.")
         if guide_title != "Untitled Guide" or description_markdown.strip():
             logging.warning("Returning only frontmatter, title, and description.")
             return (
@@ -1251,48 +753,20 @@ def scrape_steam_guide(
     return final_markdown, guide_id
 
 
-# --- Main Execution ---
-
-
 def construct_steam_guide_url(url_or_id: str) -> str:
-    """Convert a guide ID or URL to a full Steam Community Guide URL.
+    """Normalize a guide ID or URL to a full Steam Community Guide URL.
 
-    This function handles both URL and ID inputs, ensuring that a valid
-    Steam Community Guide URL is returned. It's used to normalize input
-    before processing.
-
-    Args:
-        url_or_id: Either a full Steam Community Guide URL or a numeric guide ID.
-                  Examples:
-                  - URL: "https://steamcommunity.com/sharedfiles/filedetails/?id=2008348525"
-                  - ID: "2008348525"
-
-    Returns:
-        A complete Steam Community Guide URL. If the input is already a URL,
-        it's returned as-is. If it's a numeric ID, it's converted to the
-        appropriate URL format.
-
-    Note:
-        The function does not validate whether the guide actually exists
-        on Steam - it only ensures the URL format is correct.
+    Passes through URLs as-is; converts numeric IDs to the standard URL format.
     """
     # Check if input is already a URL
     if url_or_id.startswith(("http://", "https://")):
         return url_or_id
-
-    # Check if input is a numeric ID
     if url_or_id.isdigit():
         return f"https://steamcommunity.com/sharedfiles/filedetails/?id={url_or_id}"
 
-    # If it's neither a URL nor a numeric ID, return as is (will fail validation later)
-    logging.warning(
-        "Input '%s' doesn't appear to be a valid URL or guide ID.",
-        url_or_id,
-    )
+    logging.warning("Input '%s' doesn't appear to be a valid URL or guide ID.", url_or_id)
     return url_or_id
 
-
-# New function to fetch all guide IDs for a game
 def fetch_guide_ids_for_game(
     game_id: str,
     delay: float,
@@ -1301,21 +775,7 @@ def fetch_guide_ids_for_game(
     retries: int = 1,
     timeout: float = 30.0
 ) -> List[str]:
-    """Fetches all English guide IDs for a given Steam game ID, up to an optional limit.
-
-    Handles pagination on the Steam Community guides page.
-
-    Args:
-        game_id: The Steam App ID of the game.
-        delay: Minimum delay between fetching index pages.
-        sort_by: Sorting order for guides.
-        limit: Optional maximum number of guide IDs to fetch.
-        retries: Number of times to retry on network errors (0 means 1 attempt).
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A list of unique guide IDs (as strings).
-    """
+    """Fetch all English guide IDs for a game, with optional limit and pagination."""
     if limit is not None and limit <= 0:
         logging.warning("Limit provided is zero or negative, ignoring limit.")
         limit = None
@@ -1328,15 +788,15 @@ def fetch_guide_ids_for_game(
     )
     guide_ids = set()
     page_num = 1
-    max_pages = 1  # Start assuming one page
+    max_pages = 1
 
     while page_num <= max_pages:
-        # Check if limit is already reached before fetching the page
+
         if limit is not None and len(guide_ids) >= limit:
             logging.info("Reached guide limit (%s), stopping pagination.", limit)
             break
 
-        # Construct URL with sort_by
+
         index_url = (
             f"https://steamcommunity.com/app/{game_id}/guides/"
             f"?browsefilter={sort_by}&filetype=11&requiredtags[]=english"
@@ -1350,14 +810,13 @@ def fetch_guide_ids_for_game(
             index_url,
         )
 
-        # Pass retries and timeout to fetch_html
         html_content = fetch_html(index_url, retries=retries, timeout=timeout)
         if not html_content:
             logging.error(
                 "Failed to fetch index page %s. Stopping guide ID collection.",
                 page_num,
             )
-            break  # Stop if a page fails
+            break
 
         soup = parse_and_clean_soup(html_content)
         if not soup:
@@ -1365,20 +824,19 @@ def fetch_guide_ids_for_game(
                 "Failed to parse index page %s. Stopping.",
                 page_num,
             )
-            break  # Stop if parsing fails
+            break
 
-        # Find guide links on the current page
         guide_links = soup.select("a.workshopItemCollection")
         page_ids_found_this_loop = 0
         for link in guide_links:
-            # Check if limit is reached within the page loop
+
             if limit is not None and len(guide_ids) >= limit:
                 logging.info(
                     "Reached guide limit (%s) while processing page %s.",
                     limit,
                     page_num,
                 )
-                break  # Stop processing links on this page
+                break
 
             guide_id = link.get('data-publishedfileid')
             if guide_id and guide_id.isdigit():
@@ -1386,7 +844,7 @@ def fetch_guide_ids_for_game(
                     guide_ids.add(guide_id)
                     page_ids_found_this_loop += 1
             else:
-                # Fallback to extracting from href if data attribute missing
+                # Fallback: extract from href
                 href = link.get('href')
                 if href:
                     extracted_id = get_guide_id_from_url(href)
@@ -1401,18 +859,15 @@ def fetch_guide_ids_for_game(
             len(guide_ids),
         )
         if page_ids_found_this_loop == 0 and page_num > 1 and not guide_links:
-            # Only warn if no links were present at all on a later page
             logging.warning(
                 "No guides found on page %s, might indicate end or issue.",
                 page_num,
             )
 
-        # Determine max pages only on the first iteration
         if page_num == 1:
             pagination_links = soup.select("a.pagelink")
             if pagination_links:
                 try:
-                    # Get the text (page number) of the last pagination link
                     last_page_text = safe_get_text(pagination_links[-1])
                     if last_page_text and last_page_text.isdigit():
                         max_pages = int(last_page_text)
@@ -1421,7 +876,7 @@ def fetch_guide_ids_for_game(
                         logging.warning(
                             "Could not reliably determine max pages from pagination. Assuming 1."
                         )
-                        max_pages = 1  # Fallback if last link isn't a number
+                        max_pages = 1
                 except (IndexError, ValueError, TypeError) as e:
                     logging.warning(
                         "Error parsing pagination, assuming 1 page: %s",
@@ -1430,16 +885,14 @@ def fetch_guide_ids_for_game(
                     max_pages = 1
             else:
                 logging.info("No pagination found, assuming 1 page.")
-                max_pages = 1  # No pagination links, only one page
+                max_pages = 1
 
-        # Check if we need to continue pagination (and limit not reached)
         if page_num >= max_pages or (limit is not None and len(guide_ids) >= limit):
             break
 
         page_num += 1
 
-        # Apply delay before fetching the next page
-        sleep_time = delay * (0.5 + random.random())  # Randomize delay
+        sleep_time = delay * (0.5 + random.random())
         logging.debug("Waiting %.2fs before next index page request...", sleep_time)
         time.sleep(sleep_time)
 
@@ -1453,7 +906,6 @@ def fetch_guide_ids_for_game(
     return list(guide_ids)
 
 
-# Refactored processing function
 def process_guide_list(
     guide_inputs: List[str],
     output_dir: str,
@@ -1463,22 +915,7 @@ def process_guide_list(
     retries: int = 1,
     timeout: float = 30.0
 ) -> List[Dict[str, Any]]:
-    """Processes a list of guide URLs or IDs, scraping and saving them.
-
-    Skips existing files by default unless overwrite is True.
-
-    Args:
-        guide_inputs: List of guide URLs or IDs.
-        output_dir: Directory to save output files.
-        delay: Minimum delay between scraping individual guides.
-        overwrite: Whether to overwrite existing Markdown files.
-        fail_fast: Whether to exit immediately if an error occurs.
-        retries: Number of times to retry on network errors.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        A list of dictionaries containing processing results for each guide.
-    """
+    """Scrape and save a list of guides. Skips existing files unless overwrite is True."""
     if not guide_inputs:
         logging.warning("No guide inputs provided to process.")
         return []
@@ -1499,7 +936,7 @@ def process_guide_list(
     results = []
 
     for i, guide_input in enumerate(guide_inputs, 1):
-        # --- Check for existing file before scraping ---
+
         potential_guide_id = None
         if isinstance(guide_input, str) and guide_input.isdigit():
             potential_guide_id = guide_input
@@ -1524,7 +961,7 @@ def process_guide_list(
                     "status": "skipped",
                     "output_file": output_file_check,
                 })
-                continue  # Move to the next guide input
+                continue
             elif os.path.exists(output_file_check) and overwrite:
                 logging.debug(
                     "File exists for guide %s but overwrite is enabled.",
@@ -1535,7 +972,7 @@ def process_guide_list(
                 "Could not determine potential guide ID from input '%s' for pre-check.",
                 guide_input,
             )
-        # --- End check for existing file ---
+
 
         url = construct_steam_guide_url(guide_input)
         logging.info("Processing guide %s/%s: %s", i, len(guide_inputs), url)
@@ -1546,15 +983,14 @@ def process_guide_list(
             )
 
             if markdown_result and guide_id_scraped:
-                # Ensure guide_id is string for filename
                 guide_id_str = str(guide_id_scraped)
                 output_file = os.path.join(output_dir, f"{guide_id_str}.md")
                 with open(output_file, "w", encoding="utf-8") as f:
-                    f.write(markdown_result + "\n")  # Add trailing newline
+                    f.write(markdown_result + "\n")
                 results.append(
                     {
                         "input": guide_input,
-                        "guide_id": guide_id_scraped,  # Keep original type (int/str)
+                        "guide_id": guide_id_scraped,
                         "status": "success",
                         "output_file": output_file,
                     }
@@ -1564,7 +1000,7 @@ def process_guide_list(
                 results.append(
                     {
                         "input": guide_input,
-                        "guide_id": guide_id_scraped,  # Keep original type (int/str)
+                        "guide_id": guide_id_scraped,
                         "status": "failed",
                         "error": "Failed to extract guide content or guide ID",
                     }
@@ -1580,18 +1016,17 @@ def process_guide_list(
                 }
             )
             logging.error("Error processing %s: %s", url, e)
-            # Implement fail-fast logic
+
             if fail_fast:
                 logging.critical("Fail-fast enabled: Exiting due to error.")
                 sys.exit(1)
 
-        # Apply rate limiting delay between scraping guides
-        if i < len(guide_inputs):  # Don't delay after the last guide
-            sleep_time = delay * (0.5 + random.random())  # Randomize delay
+        if i < len(guide_inputs):
+            sleep_time = delay * (0.5 + random.random())
             logging.debug("Waiting %.2fs before next guide request...", sleep_time)
             time.sleep(sleep_time)
 
-    # Report summary
+
     successful = sum(1 for r in results if r["status"] == "success")
     logging.info(
         "Processing complete. %s/%s guides successfully processed.",
@@ -1602,25 +1037,14 @@ def process_guide_list(
 
 
 def main():
-    """Parses arguments, runs the scraper, and handles output.
-
-    Supports single guide, batch file, or fetching all guides for a game.
-    """
+    """CLI entry point. Supports single guide (--input) or game-wide fetch (--game-id)."""
     parser = argparse.ArgumentParser(
         description="""
 Steam Guide Scraper - Convert Steam Community Guides to Markdown with YAML frontmatter.
 
-This tool fetches guides from the Steam Community, extracts their content and metadata,
-and saves them as clean Markdown files with YAML frontmatter.
-
 Modes:
-1. Single Guide: Provide a URL or guide ID using --input.
-2. Batch File: Provide a text file with URLs/IDs (one per line) using --file.
-3. Game Guides: Provide a game's App ID using --game-id to fetch all its English guides.
-
-The script includes comprehensive metadata extraction, including guide IDs, game information,
-author details, dates, ratings, visitor statistics, and more. All metadata is preserved
-in the YAML frontmatter of the output Markdown files.
+  1. Single Guide: Provide a URL or guide ID using --input.
+  2. Game Guides: Provide a game's App ID using --game-id to fetch all English guides.
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1651,7 +1075,7 @@ in the YAML frontmatter of the output Markdown files.
         type=float,
         default=1.0,
         help="Minimum delay (seconds) between requests (index pages and guides). "
-        "Randomized between 50%-150%. Default: 1.0",
+        "Randomized between 50%%-150%%. Default: 1.0",
     )
     parser.add_argument(
         "-v",
@@ -1669,13 +1093,13 @@ in the YAML frontmatter of the output Markdown files.
     )
     parser.add_argument(
         "--overwrite",
-        action="store_true",  # Default is False
+        action="store_true",
         help="Overwrite existing Markdown files. If not set, existing files are skipped."
     )
     parser.add_argument(
         "--retries",
         type=int,
-        default=1,  # Default to 1 retry (2 total attempts)
+        default=1,
         metavar="N",
         help="Number of times to retry fetching a page on network errors (default: 1)."
     )
@@ -1695,7 +1119,7 @@ in the YAML frontmatter of the output Markdown files.
     )
     parser.add_argument(
         "--fail-fast",
-        action="store_true",  # Default is False
+        action="store_true",
         help="Exit immediately if an error occurs during batch processing (--file or --game-id)."
     )
     parser.add_argument(
@@ -1714,22 +1138,16 @@ in the YAML frontmatter of the output Markdown files.
         logging.getLogger().setLevel(logging.DEBUG)
         logging.debug("Verbose logging enabled.")
 
-    # --- User-Agent Override ---
     if args.user_agent:
         logging.info("Overriding User-Agent with: %s", args.user_agent)
         HEADERS["User-Agent"] = args.user_agent
-    # --- End User-Agent Override ---
 
-    # --- Mode Handling ---
-
-    # 1. Process guides by Game ID
     if args.game_id:
         if not args.game_id.isdigit():
             logging.error("Invalid Game ID provided: '%s'. Must be numeric.", args.game_id)
             sys.exit(1)
 
         output_dir = args.output if args.output else os.getcwd()
-        # Pass the limit, sort_by, retries, timeout
         guide_ids_to_process = fetch_guide_ids_for_game(
             args.game_id,
             args.delay,
@@ -1743,7 +1161,6 @@ in the YAML frontmatter of the output Markdown files.
             logging.warning("No guide IDs found for game %s. Exiting.", args.game_id)
             sys.exit(0)
 
-        # Pass the overwrite, fail_fast, retries, timeout
         results = process_guide_list(
             guide_ids_to_process,
             output_dir,
@@ -1754,13 +1171,11 @@ in the YAML frontmatter of the output Markdown files.
             timeout=args.timeout,
         )
         if not results or all(r['status'] != 'success' for r in results):
-            sys.exit(1)  # Exit with error if no guides succeeded
+            sys.exit(1)
         sys.exit(0)
 
-    # 3. Process single guide input
     elif args.input:
         url = construct_steam_guide_url(args.input)
-        # Pass retries and timeout
         markdown_result, guide_id = scrape_steam_guide(
             url,
             retries=args.retries,
@@ -1768,7 +1183,7 @@ in the YAML frontmatter of the output Markdown files.
         )
 
         if markdown_result is not None and markdown_result.strip():
-            final_output = markdown_result + "\n"  # Ensure trailing newline
+            final_output = markdown_result + "\n"
             output_file = args.output
             guide_id_str = str(guide_id) if guide_id else None
 
@@ -1782,11 +1197,11 @@ in the YAML frontmatter of the output Markdown files.
                     )
                     print("\n--- Markdown Output ---")
                     print(final_output)
-                    sys.exit(0)  # Exit cleanly after printing
+                    sys.exit(0)
 
             logging.info("Attempting to write output to file: %s", output_file)
             try:
-                # Create output directory if it doesn't exist for single file output
+
                 output_dir = os.path.dirname(output_file)
                 if output_dir and not os.path.exists(output_dir):
                     os.makedirs(output_dir)
@@ -1795,13 +1210,13 @@ in the YAML frontmatter of the output Markdown files.
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(final_output)
                 logging.info("Markdown content successfully saved to: %s", output_file)
-                sys.exit(0)  # Success
+                sys.exit(0)
             except IOError as e:
                 logging.error("Error writing to file %s: %s", output_file, e)
                 logging.info("Printing Markdown output to console as fallback.")
                 print("\n--- Markdown Output (Fallback) ---")
                 print(final_output)
-                sys.exit(1)  # Indicate error after fallback print
+                sys.exit(1)
         else:
             logging.error("Failed to scrape the guide or no meaningful content was found.")
             sys.exit(1)
