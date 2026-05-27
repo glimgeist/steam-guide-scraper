@@ -10,7 +10,7 @@ import re
 import logging
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Union
 import time
 import random
 import os
@@ -333,6 +333,151 @@ def parse_and_clean_soup(html_content: str) -> Optional[bs4.BeautifulSoup]:
         return None
 
 
+def _extract_game_id(soup: bs4.BeautifulSoup, guide_id: Optional[str]) -> Optional[Union[int, str]]:
+    """Extract the Steam App ID from the guide page."""
+    log_prefix = f"[Game ID Extraction (Guide {guide_id or 'N/A'})]"
+    
+    # 1. Try input[name="appid"]
+    appid_inputs = soup.select('input[name="appid"]')
+    for input_elem in appid_inputs:
+        val = input_elem.get("value")
+        if val and val.isdigit():
+            logging.debug(f"{log_prefix} Success (Method 1): Found game_id '{val}'.")
+            return int(val)
+            
+    # 2. Try store button link
+    store_button = soup.select_one('a.btnv6_blue_hoverfade[data-appid][href*="/app/"]')
+    if store_button:
+        data_appid = store_button.get('data-appid')
+        if data_appid and data_appid.isdigit():
+            logging.debug(f"{log_prefix} Success (Method 2): Found game_id '{data_appid}'.")
+            return int(data_appid)
+        
+        href = store_button.get('href')
+        if href:
+            match = re.search(r"/app/(\d+)", href)
+            if match:
+                logging.debug(f"{log_prefix} Success (Method 2 fallback): Found game_id '{match.group(1)}'.")
+                return int(match.group(1))
+
+    # 3. Try guide link
+    any_guide_link = soup.select_one('a.workshopItemCollection[data-appid]')
+    if any_guide_link:
+        data_appid = any_guide_link.get('data-appid')
+        if data_appid and data_appid.isdigit():
+            logging.debug(f"{log_prefix} Success (Method 3): Found game_id '{data_appid}'.")
+            return int(data_appid)
+
+    # 4. Try JS variables
+    logging.debug(f"{log_prefix} Trying Method 4: JS variables.")
+    html_content = str(soup)
+    for pattern in [r"g_steamIDAppID\s*=\s*['\"]?(\d+)['\"]?", r"ShowModalContent\s*\(\s*[^,]+,\s*['\"](\d+)['\"]", r'"appid"\s*:\s*(\d+)']:
+        match = re.search(pattern, html_content)
+        if match and match.group(1):
+            logging.debug(f"{log_prefix} Success (Method 4): Found game_id '{match.group(1)}'.")
+            return int(match.group(1))
+
+    logging.warning(f"{log_prefix} FAILED: Could not determine Game ID.")
+    return None
+
+def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
+    """Extract the author list and fallback author string."""
+    authors = []
+    created_by_section = soup.select_one(".rightDetailsBlock .creatorsBlock")
+    if created_by_section:
+        for author_link in created_by_section.select(".friendBlock a.friendBlockLinkOverlay"):
+            author_url = author_link.get("href", "")
+            if author_url:
+                username = author_url.rstrip("/").split("/")[-1]
+                if username:
+                    authors.append(username)
+                    
+    if authors:
+        return authors, ", ".join(authors)
+
+    # Fallback to old method
+    author_elem = soup.select_one(".guideAuthors")
+    author_text = safe_get_text(author_elem)
+    author_str = author_text.replace("By ", "").strip() if author_text else "Unknown Author"
+    return [author_str], author_str
+
+def _extract_tags_and_languages(soup: bs4.BeautifulSoup) -> Tuple[Any, Any]:
+    """Extract categories and languages tags."""
+    categories, languages = [], []
+    for tag_elem in soup.select(".rightDetailsBlock .workshopTags"):
+        title_span = tag_elem.select_one(".workshopTagsTitle")
+        if not title_span:
+            continue
+            
+        title_text = safe_get_text(title_span, strip=True).lower()
+        link_texts = [text for link in tag_elem.find_all("a") if (text := safe_get_text(link, strip=True))]
+        
+        if "category" in title_text:
+            categories.extend(link_texts)
+        elif "languages" in title_text:
+            languages.extend(link_texts)
+
+    cat_result = categories[0] if len(categories) == 1 else (categories or None)
+    lang_result = languages[0] if len(languages) == 1 else (languages or None)
+    return cat_result, lang_result
+
+def _extract_dates(soup: bs4.BeautifulSoup) -> Tuple[str, str]:
+    """Extract post and update dates."""
+    post_date, update_date = "", ""
+    date_elements = soup.select(".rightDetailsBlock .detailsStatRight")
+    label_elements = soup.select(".rightDetailsBlock .detailsStatLeft")
+
+    if len(date_elements) == len(label_elements):
+        for label_elem, date_elem in zip(label_elements, date_elements):
+            label_text = " ".join(label_elem.stripped_strings).strip()
+            date_text = " ".join(date_elem.stripped_strings).strip()
+            
+            if not date_text:
+                continue
+                
+            parsed_date = parse_steam_date(date_text)
+            if label_text == "Posted":
+                if parsed_date: post_date = parsed_date
+                else: logging.warning(f"Could not parse post date: {date_text}")
+            elif label_text == "Updated":
+                if parsed_date: update_date = parsed_date
+                else: logging.warning(f"Could not parse update date: {date_text}")
+
+    if update_date and not post_date:
+        post_date = update_date
+    elif post_date and not update_date:
+        update_date = post_date
+
+    return post_date, update_date
+
+def _extract_statistics(soup: bs4.BeautifulSoup) -> Tuple[int, int, int, int, int]:
+    """Extract rating, num_ratings, visitors, favorites, and comments."""
+    rating = 0
+    rating_elem = soup.select_one(".ratingSection .fileRatingDetails img")
+    if rating_elem and rating_elem.get("src"):
+        match = re.search(r"(\\d)-star_large\\.png", rating_elem["src"])
+        if match:
+            rating = int(match.group(1))
+
+    num_ratings = safe_get_number(safe_get_text(soup.select_one(".ratingSection .numRatings"))) or 0
+    
+    unique_visitors, current_favorites = 0, 0
+    stats_table = soup.select_one(".panel table.stats_table")
+    if stats_table:
+        for row in stats_table.find_all("tr"):
+            cols = row.find_all("td")
+            if len(cols) == 2:
+                val = safe_get_text(cols[0])
+                lbl = safe_get_text(cols[1])
+                if lbl == "Unique Visitors":
+                    unique_visitors = safe_get_number(val) or 0
+                elif lbl == "Current Favorites":
+                    current_favorites = safe_get_number(val) or 0
+
+    comments = safe_get_number(safe_get_text(soup.select_one('.commentthread_count_label span[id$="_totalcount"]'))) or 0
+    
+    return rating, num_ratings, unique_visitors, current_favorites, comments
+
 def extract_metadata(
     soup: bs4.BeautifulSoup, guide_id: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -384,250 +529,29 @@ def extract_metadata(
     logging.debug("Extracting metadata...")
     metadata = {}
 
-    # Add guide ID to metadata if available and numeric
     if guide_id and guide_id.isdigit():
         metadata["guide_id"] = int(guide_id)
     elif guide_id:
-        metadata["guide_id"] = guide_id # Keep as string if not purely numeric
+        metadata["guide_id"] = guide_id
 
-    # Get game title and ID
     app_name_elem = soup.select_one(".apphub_AppName.ellipsis")
     metadata["game_title"] = safe_get_text(app_name_elem) or "Unknown Game"
-
-    # --- Robust Game ID Extraction --- 
-    game_id = None
-    log_prefix = f"[Game ID Extraction (Guide {guide_id or 'N/A'})]" # Add prefix for clarity
-
-    # 1. Try input[name="appid"] (Most Reliable)
-    appid_inputs = soup.select('input[name="appid"]')
-    if appid_inputs:
-        logging.debug(f"{log_prefix} Found {len(appid_inputs)} input elements with name='appid'.")
-        for input_elem in appid_inputs:
-            if "value" in input_elem.attrs and input_elem["value"].isdigit():
-                game_id = input_elem["value"]
-                logging.debug(f"{log_prefix} Success (Method 1): Found game_id '{game_id}' in input[name='appid'].")
-                break # Found it
-        if not game_id:
-            logging.debug(f"{log_prefix} Method 1 Checked: Input elements found, but none had a valid numeric 'value'.")
-    else:
-        logging.debug(f"{log_prefix} Method 1 Failed: No input elements with name='appid' found.")
-
-    # 2. Try data-appid from store page button (Specific Link)
-    if not game_id:
-        store_button = soup.select_one('a.btnv6_blue_hoverfade[data-appid][href*="/app/"]')
-        if store_button:
-            data_appid = store_button.get('data-appid')
-            if data_appid and data_appid.isdigit():
-                game_id = data_appid
-                logging.debug(f"{log_prefix} Success (Method 2): Found game_id '{game_id}' from store button data-appid.")
-            else:
-                 # Fallback: try parsing href from store button if data-appid missing/invalid
-                 href = store_button.get('href')
-                 if href:
-                     match = re.search(r"/app/(\d+)", href)
-                     if match:
-                         game_id = match.group(1)
-                         logging.debug(f"{log_prefix} Success (Method 2): Found game_id '{game_id}' parsed from store button href.")
-                     else:
-                         logging.debug(f"{log_prefix} Method 2 Checked: Store button found, but couldn't parse valid game_id from href or data-appid.")
-                 else:
-                     logging.debug(f"{log_prefix} Method 2 Checked: Store button found, but data-appid invalid and href missing.")
-        else:
-            logging.debug(f"{log_prefix} Method 2 Failed: Store page button link not found.")
-
-
-    # 3. Try data-appid from any workshop item link (Guide links)
-    if not game_id:
-        any_guide_link = soup.select_one('a.workshopItemCollection[data-appid]')
-        if any_guide_link:
-            data_appid = any_guide_link.get('data-appid')
-            if data_appid and data_appid.isdigit():
-                game_id = data_appid
-                logging.debug(f"{log_prefix} Success (Method 3): Found game_id '{game_id}' from a guide link data-appid.")
-            else:
-                logging.debug(f"{log_prefix} Method 3 Checked: Found guide link, but its data-appid was invalid: {data_appid}")
-        else:
-             logging.debug(f"{log_prefix} Method 3 Failed: No guide links with data-appid found.")
-
-
-    # 4. Fallback: try JavaScript variable in page HTML
-    if not game_id:
-        logging.debug(f"{log_prefix} Trying Method 4: Searching JS variables in HTML content.")
-        html_content = str(soup)
-        # Look for g_steamIDAppID or similar patterns
-        js_patterns = [
-            r'g_steamIDAppID\s*=\s*[\'\"]?(\d+)[\'\"]?', # Escaped quotes for linter
-            r'ShowModalContent\s*\(\s*[^,]+,\s*[\'\"](\d+)[\'\"]', # Check modal calls
-            r'"appid"\s*:\s*(\d+)', # Generic JSON-like appid pattern
-        ]
-        for pattern in js_patterns:
-            app_id_match = re.search(pattern, html_content)
-            if app_id_match:
-                potential_id = app_id_match.group(1)
-                if potential_id: # Ensure group captured something
-                     game_id = potential_id
-                     logging.debug(f"{log_prefix} Success (Method 4): Found potential game_id '{game_id}' in JS using pattern: {pattern}")
-                     break # Found one
-        if not game_id:
-             logging.debug(f"{log_prefix} Method 4 Failed: No matching JS variable patterns found.")
-
-
-    # Final assignment to metadata
-    if game_id:
-        try:
-            metadata["game_id"] = int(game_id) # Convert to int
-            logging.debug(f"{log_prefix} Successfully extracted game_id: {metadata['game_id']} (as int)")
-        except (ValueError, TypeError):
-            metadata["game_id"] = game_id # Keep as string if conversion fails
-            logging.warning(f"{log_prefix} Extracted game_id '{game_id}' but failed to convert to int. Storing as string.")
-    else:
-        logging.warning(f"{log_prefix} FAILED: Could not determine Game ID using any method.")
-        metadata["game_id"] = None # Ensure the key exists
-    # --- End Game ID Extraction --- 
-
-    # Get guide title
+    metadata["game_id"] = _extract_game_id(soup, guide_id)
+    
     title_element = soup.select_one(".workshopItemTitle")
-    guide_title = safe_get_text(title_element)
-    if guide_title:
+    if guide_title := safe_get_text(title_element):
         metadata["guide_title"] = guide_title
 
-    # Get authors from the 'Created by' section
-    metadata["authors"] = []
-    created_by_section = soup.select_one(".rightDetailsBlock .creatorsBlock")
-    if created_by_section:
-        author_links = created_by_section.select(
-            ".friendBlock a.friendBlockLinkOverlay"
-        )
-        for author_link in author_links:
-            author_url = author_link.get("href", "")
-            # Extract username from URL or profile
-            if author_url:
-                username = author_url.rstrip("/").split("/")[-1]
-                if username:
-                    metadata["authors"].append(username)
-
-    # Set a single author field for backward compatibility
-    if metadata["authors"]:
-        metadata["author"] = ", ".join(metadata["authors"])
-    else:
-        # Fallback to old method if no authors found
-        author_elem = soup.select_one(".guideAuthors")
-        author_text = safe_get_text(author_elem)
-        metadata["author"] = (
-            author_text.replace("By ", "").strip() if author_text else "Unknown Author"
-        )
-        metadata["authors"] = [
-            metadata["author"]
-        ]  # Set authors list with single author
-
-    rating_elem = soup.select_one(".ratingSection .fileRatingDetails img")
-    metadata["rating"] = 0  # Default to 0 instead of None
-    if rating_elem and rating_elem.get("src"):
-        match = re.search(r"(\d)-star_large\.png", rating_elem["src"])
-        if match:
-            metadata["rating"] = int(match.group(1))
-
-    # Get number of ratings (default to 0)
-    num_ratings = safe_get_number(
-        safe_get_text(soup.select_one(".ratingSection .numRatings"))
-    )
-    metadata["num_ratings"] = num_ratings if num_ratings is not None else 0
-
-    metadata["category"] = []
-    metadata["languages"] = []
-    tag_elements = soup.select(".rightDetailsBlock .workshopTags")
-    for tag_elem in tag_elements:
-        title_span = tag_elem.select_one(".workshopTagsTitle")
-        if title_span:
-            title_text = safe_get_text(title_span, strip=True).lower()
-            links = tag_elem.find_all("a")
-            link_texts = [
-                text for link in links if (text := safe_get_text(link, strip=True))
-            ]
-            if "category" in title_text:
-                metadata["category"].extend(link_texts)
-            elif "languages" in title_text:
-                metadata["languages"].extend(link_texts)
-
-    # Simplify single-item lists or set to None if empty
-    metadata["category"] = (
-        metadata["category"][0]
-        if len(metadata["category"]) == 1
-        else (metadata["category"] or None)
-    )
-    metadata["languages"] = (
-        metadata["languages"][0]
-        if len(metadata["languages"]) == 1
-        else (metadata["languages"] or None)
-    )
-
-    # --- Date Extraction Refined ---
-    metadata["post_date"] = ""
-    metadata["update_date"] = ""
-
-    date_elements = soup.select(".rightDetailsBlock .detailsStatRight")
-    label_elements = soup.select(".rightDetailsBlock .detailsStatLeft")
-
-    if len(date_elements) == len(label_elements):
-        logging.debug(f"Found {len(label_elements)} potential date/label pairs.")
-        for label_elem, date_elem in zip(label_elements, date_elements):
-            # Get text content robustly, handling potential nested elements
-            label_text = ' '.join(label_elem.stripped_strings).strip()
-            date_text = ' '.join(date_elem.stripped_strings).strip()
-            logging.debug(f"Processing label: '{label_text}', date text: '{date_text}'")
-
-            if date_text: # Only proceed if we have a date string
-                parsed_date = parse_steam_date(date_text)
-                if label_text == "Posted":
-                    if parsed_date:
-                         metadata["post_date"] = parsed_date
-                    else:
-                         logging.warning(f"Could not parse post date: {date_text}")
-                elif label_text == "Updated":
-                    if parsed_date:
-                         metadata["update_date"] = parsed_date
-                    else:
-                         logging.warning(f"Could not parse update date: {date_text}")
-    else:
-        logging.debug("Number of date labels and values mismatch, skipping detailed date extraction.")
-
-    # If update date is found but post date is not, assume post date is the same
-    if metadata["update_date"] and not metadata["post_date"]:
-        metadata["post_date"] = metadata["update_date"]
-        logging.debug("Update date found but no post date, setting post_date to update_date.")
-    # If post date is found but update date is not, assume update date is the same
-    elif metadata["post_date"] and not metadata["update_date"]:
-         metadata["update_date"] = metadata["post_date"]
-         logging.debug("Post date found but no update date, setting update_date to post_date.")
-
-    # Process statistics with default values of 0
-    metadata["unique_visitors"] = 0
-    metadata["current_favorites"] = 0
-    stats_table = soup.select_one(".panel table.stats_table")
-    if stats_table:
-        for row in stats_table.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) == 2:
-                value_text = safe_get_text(cols[0])
-                label_text = safe_get_text(cols[1])
-                if label_text == "Unique Visitors":
-                    visitors = safe_get_number(value_text)
-                    metadata["unique_visitors"] = (
-                        visitors if visitors is not None else 0
-                    )
-                elif label_text == "Current Favorites":
-                    favorites = safe_get_number(value_text)
-                    metadata["current_favorites"] = (
-                        favorites if favorites is not None else 0
-                    )
-
-    # Get number of comments (default to 0)
-    comments = safe_get_number(
-        safe_get_text(
-            soup.select_one('.commentthread_count_label span[id$="_totalcount"]')
-        )
-    )
-    metadata["comments"] = comments if comments is not None else 0
+    metadata["authors"], metadata["author"] = _extract_authors(soup)
+    metadata["category"], metadata["languages"] = _extract_tags_and_languages(soup)
+    metadata["post_date"], metadata["update_date"] = _extract_dates(soup)
+    
+    stats = _extract_statistics(soup)
+    metadata["rating"] = stats[0]
+    metadata["num_ratings"] = stats[1]
+    metadata["unique_visitors"] = stats[2]
+    metadata["current_favorites"] = stats[3]
+    metadata["comments"] = stats[4]
 
     logging.debug("Finished extracting metadata.")
     return metadata
