@@ -2,7 +2,7 @@
 
 Command-line utility to scrape Steam Community Guides and convert them to Markdown with YAML frontmatter.
 
-**Note:** Steam Community now applies aggressive anti-automation protections. Bulk scraping will likely fail with HTTP 429 errors after a relatively small number of requests (~20), and increasing delays does not reliably prevent temporary IP throttling/blocking.
+**Note: Steam Community now applies aggressive anti-automation protections. Bulk scraping will likely fail with HTTP 429 errors after a relatively small number of requests (~20), and increasing delays does not reliably prevent temporary IP throttling/blocking.**
 
 ## Requirements
 
