@@ -26,9 +26,6 @@ except ImportError as e:
     )
     sys.exit(2)
 
-# Persistent session to reuse TCP/TLS connections and avoid fresh-client footprints
-SESSION = requests.Session()
-
 logging.basicConfig(
     level=logging.INFO, format="%(levelname)s: %(message)s", stream=sys.stderr
 )
@@ -49,13 +46,8 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://steamcommunity.com/",
-    "Connection": "keep-alive",
-    "DNT": "1",
+        "Chrome/91.0.4472.124 Safari/537.36"
+    )
 }
 
 try:
@@ -197,7 +189,7 @@ def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[st
     last_exception = None
     for attempt in range(retries + 1):
         try:
-            response = SESSION.get(url, headers=HEADERS, timeout=timeout)
+            response = requests.get(url, headers=HEADERS, timeout=timeout)
             logging.debug(
                 "Attempt %s/%s: Status %s for %s",
                 attempt + 1, retries + 1, response.status_code, url,
@@ -1030,18 +1022,9 @@ def process_guide_list(
                 sys.exit(1)
 
         if i < len(guide_inputs):
-            successful_downloads = sum(1 for r in results if r["status"] == "success")
-            
-            # Steam Community uses aggressive temporary anti-automation throttling.
-            # Insert a longer cooldown every 10 successful guides to avoid HTTP 429s.
-            if successful_downloads > 0 and successful_downloads % 10 == 0 and results[-1].get("status") == "success":
-                cooldown = random.uniform(60.0, 180.0)
-                logging.info("Anti-bot batch cooldown: Sleeping for %.1fs...", cooldown)
-                time.sleep(cooldown)
-            else:
-                sleep_time = delay * (0.5 + random.random())
-                logging.debug("Waiting %.2fs before next guide request...", sleep_time)
-                time.sleep(sleep_time)
+            sleep_time = delay * (0.5 + random.random())
+            logging.debug("Waiting %.2fs before next guide request...", sleep_time)
+            time.sleep(sleep_time)
 
 
     successful = sum(1 for r in results if r["status"] == "success")
