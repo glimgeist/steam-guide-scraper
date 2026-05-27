@@ -180,7 +180,7 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
     return None
 
 
-def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[str]:
+def fetch_html(url: str, retries: int = 1, timeout: float = 30.0, cookies: Optional[dict] = None) -> Optional[str]:
     """Fetch HTML content from a URL with retry and exponential backoff.
 
     Returns HTML string or None on failure.
@@ -189,7 +189,7 @@ def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[st
     last_exception = None
     for attempt in range(retries + 1):
         try:
-            response = requests.get(url, headers=HEADERS, timeout=timeout)
+            response = requests.get(url, headers=HEADERS, timeout=timeout, cookies=cookies or {})
             logging.debug(
                 "Attempt %s/%s: Status %s for %s",
                 attempt + 1, retries + 1, response.status_code, url,
@@ -809,8 +809,10 @@ def fetch_guide_ids_for_game(
             sort_by,
             index_url,
         )
-
-        html_content = fetch_html(index_url, retries=retries, timeout=timeout)
+        
+        # Pass retries, timeout, and mature content cookie to fetch_html
+        mature_cookies = {"wants_mature_content_apps": str(game_id), "mature_content": "1"}
+        html_content = fetch_html(index_url, retries=retries, timeout=timeout, cookies=mature_cookies)
         if not html_content:
             logging.error(
                 "Failed to fetch index page %s. Stopping guide ID collection.",
