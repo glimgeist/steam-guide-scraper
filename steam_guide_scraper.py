@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
+"""Steam Guide Scraper.
 
-import requests
-import bs4
-import html2text
-import yaml
+Convert Steam Community Guides to Markdown with YAML frontmatter.
+"""
+
 import argparse
-import sys
-import re
-import logging
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
-from typing import Optional, Tuple, Dict, Any, List, Union
-import time
-import random
+import logging
 import os
+import random
+import re
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import parse_qs, urlparse
+
+# Check essential dependencies early
+try:
+    import bs4
+    import html2text
+    import requests
+    import yaml
+except ImportError as e:
+    print(
+        f"CRITICAL ERROR: Missing required library: {e.name}. "
+        "Please install dependencies (e.g., pip install requests beautifulsoup4 html2text PyYAML).",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 # --- Configuration ---
 
@@ -34,12 +48,18 @@ MARKDOWN_CONVERTER.ignore_tables = False
 
 # Request Headers
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/91.0.4472.124 Safari/537.36"
+    )
 }
 
 # Try to import lxml for faster parsing
 try:
     import lxml
+    # Reference lxml to avoid unused import warning
+    _ = lxml
     HTML_PARSER = "lxml"
 except ImportError:
     HTML_PARSER = "html.parser"
@@ -89,10 +109,10 @@ def is_valid_steam_guide_url(url: str) -> bool:
             and "id=" in parsed.query
         )
         if not is_valid:
-            logging.debug(f"URL validation failed for: {url}")
+            logging.debug("URL validation failed for: %s", url)
         return is_valid
     except ValueError as e:
-        logging.debug(f"URL parsing error: {e}")
+        logging.debug("URL parsing error: %s", e)
         return False
 
 
@@ -129,8 +149,8 @@ def get_guide_id_from_url(url: str) -> Optional[str]:
         guide_id = query_params.get("id", [None])[0]
         if guide_id and guide_id.isdigit():
             return guide_id
-    except Exception as e:
-        logging.debug(f"Could not extract guide ID from URL '{url}': {e}")
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        logging.debug("Could not extract guide ID from URL '%s': %s", url, e)
     return None
 
 
@@ -242,7 +262,10 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
                 return dt_obj.strftime("%Y-%m-%d")
             except ValueError as e:
                 logging.debug(
-                    f"Failed to parse date '{date_part}' with format '{date_format}': {e}"
+                    "Failed to parse date '%s' with format '%s': %s",
+                    date_part,
+                    date_format,
+                    e,
                 )
                 # Continue to next pattern if this one fails
 
@@ -260,14 +283,24 @@ def parse_steam_date(date_str: Optional[str]) -> Optional[str]:
         date_format = "%d %b, %Y" if day_first_match else "%b %d, %Y"
         try:
             dt_obj = datetime.strptime(date_with_year, date_format)
-            logging.debug(f"Parsed date '{date_str}' assuming current year: {current_year}")
+            logging.debug(
+                "Parsed date '%s' assuming current year: %s",
+                date_str,
+                current_year,
+            )
             return dt_obj.strftime("%Y-%m-%d")
         except ValueError as e:
             logging.debug(
-                f"Failed to parse date '{date_with_year}' with assumed year format '{date_format}': {e}"
+                "Failed to parse date '%s' with assumed year format '%s': %s",
+                date_with_year,
+                date_format,
+                e,
             )
 
-    logging.warning(f"Could not parse date from string: '{date_str}' using any known format.")
+    logging.warning(
+        "Could not parse date from string: '%s' using any known format.",
+        date_str,
+    )
     return None
 
 
@@ -285,32 +318,58 @@ def fetch_html(url: str, retries: int = 1, timeout: float = 30.0) -> Optional[st
     Returns:
         HTML content as string or None if fetching fails after retries.
     """
-    logging.debug(f"Fetching: {url} (Timeout: {timeout}s, Retries: {retries})")
+    logging.debug(
+        "Fetching: %s (Timeout: %ss, Retries: %s)",
+        url,
+        timeout,
+        retries,
+    )
     last_exception = None
     for attempt in range(retries + 1):
         try:
             response = requests.get(url, headers=HEADERS, timeout=timeout)
-            logging.debug(f"Attempt {attempt + 1}/{retries + 1}: Status {response.status_code} for {url}")
+            logging.debug(
+                "Attempt %s/%s: Status %s for %s",
+                attempt + 1,
+                retries + 1,
+                response.status_code,
+                url,
+            )
             response.raise_for_status()
             response.encoding = response.apparent_encoding or "utf-8"
-            logging.info(f"Successfully fetched URL: {url}")
+            logging.info("Successfully fetched URL: %s", url)
             return response.text
         except requests.exceptions.RequestException as e:
             last_exception = e
-            logging.warning(f"Attempt {attempt + 1}/{retries + 1} failed for {url}: {e}")
+            logging.warning(
+                "Attempt %s/%s failed for %s: %s",
+                attempt + 1,
+                retries + 1,
+                url,
+                e,
+            )
             if attempt < retries:
                 sleep_time = min(10.0, (1.5 ** attempt) + random.uniform(0.1, 0.5))
-                logging.debug(f"Waiting {sleep_time:.2f}s before retrying...")
+                logging.debug("Waiting %.2fs before retrying...", sleep_time)
                 time.sleep(sleep_time)
             else:
-                logging.error(f"Fetching finally failed after {retries + 1} attempts for URL {url}.")
-        except Exception as e:
-            logging.error(f"Unexpected error during request/encoding for {url} on attempt {attempt + 1}: {e}")
+                logging.error(
+                    "Fetching finally failed after %s attempts for URL %s.",
+                    retries + 1,
+                    url,
+                )
+        except (LookupError, ValueError, TypeError, AttributeError) as e:
+            logging.error(
+                "Unexpected error during request/encoding for %s on attempt %s: %s",
+                url,
+                attempt + 1,
+                e,
+            )
             last_exception = e
             break
 
     if last_exception:
-        logging.error(f"Final error fetching {url}: {last_exception}")
+        logging.error("Final error fetching %s: %s", url, last_exception)
     return None
 
 
@@ -319,7 +378,7 @@ def parse_and_clean_soup(html_content: str) -> Optional[bs4.BeautifulSoup]:
     logging.debug("Parsing HTML content...")
     try:
         soup = bs4.BeautifulSoup(html_content, HTML_PARSER)
-        logging.debug(f"HTML parsing successful using '{HTML_PARSER}'.")
+        logging.debug("HTML parsing successful using '%s'.", HTML_PARSER)
         # Remove scripts, styles, and comments
         for element in soup(["script", "style"]):
             element.decompose()
@@ -328,36 +387,48 @@ def parse_and_clean_soup(html_content: str) -> Optional[bs4.BeautifulSoup]:
             comment.extract()
         logging.debug("Removed script/style tags and comments.")
         return soup
-    except Exception as e:
-        logging.error(f"Failed to parse HTML: {e}")
+    except (ValueError, TypeError, AttributeError) as e:
+        logging.error("Failed to parse HTML: %s", e)
         return None
 
 
 def _extract_game_id(soup: bs4.BeautifulSoup, guide_id: Optional[str]) -> Optional[Union[int, str]]:
     """Extract the Steam App ID from the guide page."""
     log_prefix = f"[Game ID Extraction (Guide {guide_id or 'N/A'})]"
-    
+
     # 1. Try input[name="appid"]
     appid_inputs = soup.select('input[name="appid"]')
     for input_elem in appid_inputs:
         val = input_elem.get("value")
         if val and val.isdigit():
-            logging.debug(f"{log_prefix} Success (Method 1): Found game_id '{val}'.")
+            logging.debug(
+                "%s Success (Method 1): Found game_id '%s'.",
+                log_prefix,
+                val,
+            )
             return int(val)
-            
+
     # 2. Try store button link
     store_button = soup.select_one('a.btnv6_blue_hoverfade[data-appid][href*="/app/"]')
     if store_button:
         data_appid = store_button.get('data-appid')
         if data_appid and data_appid.isdigit():
-            logging.debug(f"{log_prefix} Success (Method 2): Found game_id '{data_appid}'.")
+            logging.debug(
+                "%s Success (Method 2): Found game_id '%s'.",
+                log_prefix,
+                data_appid,
+            )
             return int(data_appid)
-        
+
         href = store_button.get('href')
         if href:
             match = re.search(r"/app/(\d+)", href)
             if match:
-                logging.debug(f"{log_prefix} Success (Method 2 fallback): Found game_id '{match.group(1)}'.")
+                logging.debug(
+                    "%s Success (Method 2 fallback): Found game_id '%s'.",
+                    log_prefix,
+                    match.group(1),
+                )
                 return int(match.group(1))
 
     # 3. Try guide link
@@ -365,19 +436,32 @@ def _extract_game_id(soup: bs4.BeautifulSoup, guide_id: Optional[str]) -> Option
     if any_guide_link:
         data_appid = any_guide_link.get('data-appid')
         if data_appid and data_appid.isdigit():
-            logging.debug(f"{log_prefix} Success (Method 3): Found game_id '{data_appid}'.")
+            logging.debug(
+                "%s Success (Method 3): Found game_id '%s'.",
+                log_prefix,
+                data_appid,
+            )
             return int(data_appid)
 
     # 4. Try JS variables
-    logging.debug(f"{log_prefix} Trying Method 4: JS variables.")
+    logging.debug("%s Trying Method 4: JS variables.", log_prefix)
     html_content = str(soup)
-    for pattern in [r"g_steamIDAppID\s*=\s*['\"]?(\d+)['\"]?", r"ShowModalContent\s*\(\s*[^,]+,\s*['\"](\d+)['\"]", r'"appid"\s*:\s*(\d+)']:
+    patterns = [
+        r"g_steamIDAppID\s*=\s*['\"]?(\d+)['\"]?",
+        r"ShowModalContent\s*\(\s*[^,]+,\s*['\"](\d+)['\"]",
+        r'"appid"\s*:\s*(\d+)',
+    ]
+    for pattern in patterns:
         match = re.search(pattern, html_content)
         if match and match.group(1):
-            logging.debug(f"{log_prefix} Success (Method 4): Found game_id '{match.group(1)}'.")
+            logging.debug(
+                "%s Success (Method 4): Found game_id '%s'.",
+                log_prefix,
+                match.group(1),
+            )
             return int(match.group(1))
 
-    logging.warning(f"{log_prefix} FAILED: Could not determine Game ID.")
+    logging.warning("%s FAILED: Could not determine Game ID.", log_prefix)
     return None
 
 def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
@@ -391,7 +475,7 @@ def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
                 username = author_url.rstrip("/").split("/")[-1]
                 if username:
                     authors.append(username)
-                    
+
     if authors:
         return authors, ", ".join(authors)
 
@@ -401,6 +485,7 @@ def _extract_authors(soup: bs4.BeautifulSoup) -> Tuple[List[str], str]:
     author_str = author_text.replace("By ", "").strip() if author_text else "Unknown Author"
     return [author_str], author_str
 
+
 def _extract_tags_and_languages(soup: bs4.BeautifulSoup) -> Tuple[Any, Any]:
     """Extract categories and languages tags."""
     categories, languages = [], []
@@ -408,10 +493,14 @@ def _extract_tags_and_languages(soup: bs4.BeautifulSoup) -> Tuple[Any, Any]:
         title_span = tag_elem.select_one(".workshopTagsTitle")
         if not title_span:
             continue
-            
+
         title_text = safe_get_text(title_span, strip=True).lower()
-        link_texts = [text for link in tag_elem.find_all("a") if (text := safe_get_text(link, strip=True))]
-        
+        link_texts = [
+            text
+            for link in tag_elem.find_all("a")
+            if (text := safe_get_text(link, strip=True))
+        ]
+
         if "category" in title_text:
             categories.extend(link_texts)
         elif "languages" in title_text:
@@ -431,17 +520,21 @@ def _extract_dates(soup: bs4.BeautifulSoup) -> Tuple[str, str]:
         for label_elem, date_elem in zip(label_elements, date_elements):
             label_text = " ".join(label_elem.stripped_strings).strip()
             date_text = " ".join(date_elem.stripped_strings).strip()
-            
+
             if not date_text:
                 continue
-                
+
             parsed_date = parse_steam_date(date_text)
             if label_text == "Posted":
-                if parsed_date: post_date = parsed_date
-                else: logging.warning(f"Could not parse post date: {date_text}")
+                if parsed_date:
+                    post_date = parsed_date
+                else:
+                    logging.warning("Could not parse post date: %s", date_text)
             elif label_text == "Updated":
-                if parsed_date: update_date = parsed_date
-                else: logging.warning(f"Could not parse update date: {date_text}")
+                if parsed_date:
+                    update_date = parsed_date
+                else:
+                    logging.warning("Could not parse update date: %s", date_text)
 
     if update_date and not post_date:
         post_date = update_date
@@ -450,17 +543,18 @@ def _extract_dates(soup: bs4.BeautifulSoup) -> Tuple[str, str]:
 
     return post_date, update_date
 
+
 def _extract_statistics(soup: bs4.BeautifulSoup) -> Tuple[int, int, int, int, int]:
     """Extract rating, num_ratings, visitors, favorites, and comments."""
     rating = 0
     rating_elem = soup.select_one(".ratingSection .fileRatingDetails img")
     if rating_elem and rating_elem.get("src"):
-        match = re.search(r"(\\d)-star_large\\.png", rating_elem["src"])
+        match = re.search(r"(\d)-star_large\.png", rating_elem["src"])
         if match:
             rating = int(match.group(1))
 
     num_ratings = safe_get_number(safe_get_text(soup.select_one(".ratingSection .numRatings"))) or 0
-    
+
     unique_visitors, current_favorites = 0, 0
     stats_table = soup.select_one(".panel table.stats_table")
     if stats_table:
@@ -474,8 +568,9 @@ def _extract_statistics(soup: bs4.BeautifulSoup) -> Tuple[int, int, int, int, in
                 elif lbl == "Current Favorites":
                     current_favorites = safe_get_number(val) or 0
 
-    comments = safe_get_number(safe_get_text(soup.select_one('.commentthread_count_label span[id$="_totalcount"]'))) or 0
-    
+    comments_elem = soup.select_one('.commentthread_count_label span[id$="_totalcount"]')
+    comments = safe_get_number(safe_get_text(comments_elem)) or 0
+
     return rating, num_ratings, unique_visitors, current_favorites, comments
 
 def extract_metadata(
@@ -537,7 +632,7 @@ def extract_metadata(
     app_name_elem = soup.select_one(".apphub_AppName.ellipsis")
     metadata["game_title"] = safe_get_text(app_name_elem) or "Unknown Game"
     metadata["game_id"] = _extract_game_id(soup, guide_id)
-    
+
     title_element = soup.select_one(".workshopItemTitle")
     if guide_title := safe_get_text(title_element):
         metadata["guide_title"] = guide_title
@@ -545,7 +640,7 @@ def extract_metadata(
     metadata["authors"], metadata["author"] = _extract_authors(soup)
     metadata["category"], metadata["languages"] = _extract_tags_and_languages(soup)
     metadata["post_date"], metadata["update_date"] = _extract_dates(soup)
-    
+
     stats = _extract_statistics(soup)
     metadata["rating"] = stats[0]
     metadata["num_ratings"] = stats[1]
@@ -622,17 +717,16 @@ def generate_frontmatter(metadata: Dict[str, Any]) -> str:
         sorted_metadata = {k: metadata_to_dump[k] for k in key_order if k in metadata_to_dump}
         # Add any remaining keys not in the order list (maintains them alphabetically)
         for k in sorted(metadata_to_dump.keys()):
-             if k not in sorted_metadata:
-                 sorted_metadata[k] = metadata_to_dump[k]
-
+            if k not in sorted_metadata:
+                sorted_metadata[k] = metadata_to_dump[k]
 
         yaml_string = yaml.dump(
             sorted_metadata, allow_unicode=True, sort_keys=False, default_flow_style=False
         )
         logging.debug("Generated YAML frontmatter.")
         return f"---\n{yaml_string}---\n\n"
-    except Exception as e:
-        logging.error(f"Error generating YAML frontmatter: {e}")
+    except (yaml.YAMLError, KeyError, TypeError, ValueError) as e:
+        logging.error("Error generating YAML frontmatter: %s", e)
         return ""
 
 
@@ -726,11 +820,11 @@ def extract_description(soup: bs4.BeautifulSoup) -> str:
         if description_markdown:
             logging.debug("Extracted and converted description.")
             return description_markdown + "\n\n"
-        else:
-            logging.debug("Description element found but resulted in empty Markdown.")
-            return ""
-    except Exception as e:
-        logging.error(f"Error processing description element: {e}")
+
+        logging.debug("Description element found but resulted in empty Markdown.")
+        return ""
+    except (ValueError, TypeError, AttributeError, LookupError) as e:
+        logging.error("Error processing description element: %s", e)
         return ""
 
 
@@ -804,7 +898,12 @@ def _preprocess_html_element(element: bs4.Tag, soup_instance: bs4.BeautifulSoup)
             new_tag = soup_instance.new_tag(html_tag)
             new_tag.string = text
             div.replace_with(new_tag)
-            logging.debug(f"Converted {bb_class} to {html_tag}: {text[:50]}...")
+            logging.debug(
+                "Converted %s to %s: %s...",
+                bb_class,
+                html_tag,
+                text[:50],
+            )
 
     # Standardize lists (remove bb_ classes)
     for list_tag in element.find_all(["ul", "ol"]):
@@ -878,7 +977,8 @@ def _convert_bb_table_to_html(bb_table_div: bs4.Tag, soup_instance: bs4.Beautifu
         return
 
     logging.debug(
-        f"Found div-based table structure with {len(row_divs)} rows. Converting..."
+        "Found div-based table structure with %s rows. Converting...",
+        len(row_divs),
     )
     new_table = soup_instance.new_tag("table")
     tbody = soup_instance.new_tag("tbody")
@@ -968,7 +1068,8 @@ def process_main_content(soup: bs4.BeautifulSoup) -> str:
     """
     main_content_selector = "div.guide.subSections"
     logging.debug(
-        f"Attempting to find main content container: '{main_content_selector}'"
+        "Attempting to find main content container: '%s'",
+        main_content_selector,
     )
     main_content_container = soup.select_one(main_content_selector)
 
@@ -994,8 +1095,8 @@ def process_main_content(soup: bs4.BeautifulSoup) -> str:
         main_content_markdown = MARKDOWN_CONVERTER.handle(main_content_html).strip()
         logging.debug("Main content conversion successful.")
         return main_content_markdown
-    except Exception as e:
-        logging.error(f"Error during main content conversion: {e}")
+    except (ValueError, TypeError, AttributeError, LookupError) as e:
+        logging.error("Error during main content conversion: %s", e)
         return ""  # Return empty on conversion error
 
 
@@ -1053,7 +1154,9 @@ def final_markdown_cleanup(markdown: str) -> str:
     return markdown.strip()  # Return stripped final result
 
 
-def scrape_steam_guide(url: str, retries: int = 1, timeout: float = 30.0) -> Tuple[Optional[str], Optional[str]]:
+def scrape_steam_guide(
+    url: str, retries: int = 1, timeout: float = 30.0
+) -> Tuple[Optional[str], Optional[str]]:
     """Scrape a Steam Community Guide and convert it to Markdown.
 
     This is the core function that handles the entire scraping process for a single guide.
@@ -1091,7 +1194,7 @@ def scrape_steam_guide(url: str, retries: int = 1, timeout: float = 30.0) -> Tup
 
     guide_id = get_guide_id_from_url(url)
     if not is_valid_steam_guide_url(url):
-        logging.error(f"Invalid Steam Community Guide URL format: {url}")
+        logging.error("Invalid Steam Community Guide URL format: %s", url)
         return (
             None,
             guide_id,
@@ -1183,18 +1286,19 @@ def construct_steam_guide_url(url_or_id: str) -> str:
 
     # If it's neither a URL nor a numeric ID, return as is (will fail validation later)
     logging.warning(
-        f"Input '{url_or_id}' doesn't appear to be a valid URL or guide ID."
+        "Input '%s' doesn't appear to be a valid URL or guide ID.",
+        url_or_id,
     )
     return url_or_id
 
 
 # New function to fetch all guide IDs for a game
 def fetch_guide_ids_for_game(
-    game_id: str, 
-    delay: float, 
-    sort_by: str = 'trend', 
-    limit: Optional[int] = None, 
-    retries: int = 1, 
+    game_id: str,
+    delay: float,
+    sort_by: str = 'trend',
+    limit: Optional[int] = None,
+    retries: int = 1,
     timeout: float = 30.0
 ) -> List[str]:
     """Fetches all English guide IDs for a given Steam game ID, up to an optional limit.
@@ -1216,15 +1320,20 @@ def fetch_guide_ids_for_game(
         logging.warning("Limit provided is zero or negative, ignoring limit.")
         limit = None
 
-    logging.info(f"Fetching guide list for game ID: {game_id}{f' (limit {limit})' if limit else ''}...")
+    limit_str = f" (limit {limit})" if limit else ""
+    logging.info(
+        "Fetching guide list for game ID: %s%s...",
+        game_id,
+        limit_str,
+    )
     guide_ids = set()
     page_num = 1
-    max_pages = 1 # Start assuming one page
+    max_pages = 1  # Start assuming one page
 
     while page_num <= max_pages:
         # Check if limit is already reached before fetching the page
         if limit is not None and len(guide_ids) >= limit:
-            logging.info(f"Reached guide limit ({limit}), stopping pagination.")
+            logging.info("Reached guide limit (%s), stopping pagination.", limit)
             break
 
         # Construct URL with sort_by
@@ -1233,18 +1342,30 @@ def fetch_guide_ids_for_game(
             f"?browsefilter={sort_by}&filetype=11&requiredtags[]=english"
             f"&numperpage=100&p={page_num}"
         )
-        logging.info(f"Fetching index page {page_num} / {max_pages or '?'} (Sort: {sort_by}): {index_url}")
+        logging.info(
+            "Fetching index page %s / %s (Sort: %s): %s",
+            page_num,
+            max_pages or "?",
+            sort_by,
+            index_url,
+        )
 
         # Pass retries and timeout to fetch_html
-        html_content = fetch_html(index_url, retries=retries, timeout=timeout) 
+        html_content = fetch_html(index_url, retries=retries, timeout=timeout)
         if not html_content:
-            logging.error(f"Failed to fetch index page {page_num}. Stopping guide ID collection.")
-            break # Stop if a page fails
-            
+            logging.error(
+                "Failed to fetch index page %s. Stopping guide ID collection.",
+                page_num,
+            )
+            break  # Stop if a page fails
+
         soup = parse_and_clean_soup(html_content)
         if not soup:
-            logging.error(f"Failed to parse index page {page_num}. Stopping.")
-            break # Stop if parsing fails
+            logging.error(
+                "Failed to parse index page %s. Stopping.",
+                page_num,
+            )
+            break  # Stop if parsing fails
 
         # Find guide links on the current page
         guide_links = soup.select("a.workshopItemCollection")
@@ -1252,8 +1373,12 @@ def fetch_guide_ids_for_game(
         for link in guide_links:
             # Check if limit is reached within the page loop
             if limit is not None and len(guide_ids) >= limit:
-                logging.info(f"Reached guide limit ({limit}) while processing page {page_num}.")
-                break # Stop processing links on this page
+                logging.info(
+                    "Reached guide limit (%s) while processing page %s.",
+                    limit,
+                    page_num,
+                )
+                break  # Stop processing links on this page
 
             guide_id = link.get('data-publishedfileid')
             if guide_id and guide_id.isdigit():
@@ -1269,10 +1394,18 @@ def fetch_guide_ids_for_game(
                         guide_ids.add(extracted_id)
                         page_ids_found_this_loop += 1
 
-        logging.info(f"Found {page_ids_found_this_loop} new guide IDs on page {page_num}. Total collected: {len(guide_ids)}")
+        logging.info(
+            "Found %s new guide IDs on page %s. Total collected: %s",
+            page_ids_found_this_loop,
+            page_num,
+            len(guide_ids),
+        )
         if page_ids_found_this_loop == 0 and page_num > 1 and not guide_links:
-             # Only warn if no links were present at all on a later page
-             logging.warning(f"No guides found on page {page_num}, might indicate end or issue.")
+            # Only warn if no links were present at all on a later page
+            logging.warning(
+                "No guides found on page %s, might indicate end or issue.",
+                page_num,
+            )
 
         # Determine max pages only on the first iteration
         if page_num == 1:
@@ -1283,16 +1416,21 @@ def fetch_guide_ids_for_game(
                     last_page_text = safe_get_text(pagination_links[-1])
                     if last_page_text and last_page_text.isdigit():
                         max_pages = int(last_page_text)
-                        logging.info(f"Determined total pages: {max_pages}")
+                        logging.info("Determined total pages: %s", max_pages)
                     else:
-                        logging.warning("Could not reliably determine max pages from pagination. Assuming 1.")
-                        max_pages = 1 # Fallback if last link isn't a number
+                        logging.warning(
+                            "Could not reliably determine max pages from pagination. Assuming 1."
+                        )
+                        max_pages = 1  # Fallback if last link isn't a number
                 except (IndexError, ValueError, TypeError) as e:
-                    logging.warning(f"Error parsing pagination, assuming 1 page: {e}")
+                    logging.warning(
+                        "Error parsing pagination, assuming 1 page: %s",
+                        e,
+                    )
                     max_pages = 1
             else:
                 logging.info("No pagination found, assuming 1 page.")
-                max_pages = 1 # No pagination links, only one page
+                max_pages = 1  # No pagination links, only one page
 
         # Check if we need to continue pagination (and limit not reached)
         if page_num >= max_pages or (limit is not None and len(guide_ids) >= limit):
@@ -1301,19 +1439,25 @@ def fetch_guide_ids_for_game(
         page_num += 1
 
         # Apply delay before fetching the next page
-        sleep_time = delay * (0.5 + random.random()) # Randomize delay
-        logging.debug(f"Waiting {sleep_time:.2f}s before next index page request...")
+        sleep_time = delay * (0.5 + random.random())  # Randomize delay
+        logging.debug("Waiting %.2fs before next index page request...", sleep_time)
         time.sleep(sleep_time)
 
-    logging.info(f"Finished fetching guide IDs. Found {len(guide_ids)} unique guides for game {game_id}{f' (limited to {limit})' if limit else ''}.")
+    limit_str = f" (limited to {limit})" if limit else ""
+    logging.info(
+        "Finished fetching guide IDs. Found %s unique guides for game %s%s.",
+        len(guide_ids),
+        game_id,
+        limit_str,
+    )
     return list(guide_ids)
 
 
 # Refactored processing function
 def process_guide_list(
-    guide_inputs: List[str], 
-    output_dir: str, 
-    delay: float, 
+    guide_inputs: List[str],
+    output_dir: str,
+    delay: float,
     overwrite: bool = False,
     fail_fast: bool = False,
     retries: int = 1,
@@ -1342,44 +1486,64 @@ def process_guide_list(
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
-            logging.info(f"Created output directory: {output_dir}")
+            logging.info("Created output directory: %s", output_dir)
         except OSError as e:
-            logging.error(f"Could not create output directory {output_dir}: {e}")
+            logging.error("Could not create output directory %s: %s", output_dir, e)
             return []
 
-    logging.info(f"Processing {len(guide_inputs)} guides. Output directory: {output_dir}")
+    logging.info(
+        "Processing %s guides. Output directory: %s",
+        len(guide_inputs),
+        output_dir,
+    )
     results = []
 
     for i, guide_input in enumerate(guide_inputs, 1):
-        # --- Check for existing file before scraping --- 
+        # --- Check for existing file before scraping ---
         potential_guide_id = None
         if isinstance(guide_input, str) and guide_input.isdigit():
             potential_guide_id = guide_input
         elif isinstance(guide_input, str) and guide_input.startswith(("http://", "https://")):
             potential_guide_id = get_guide_id_from_url(guide_input)
-        
+
         if potential_guide_id:
             output_file_check = os.path.join(output_dir, f"{potential_guide_id}.md")
             if os.path.exists(output_file_check) and not overwrite:
-                logging.info(f"Skipping guide {potential_guide_id}: File already exists at {output_file_check}")
+                logging.info(
+                    "Skipping guide %s: File already exists at %s",
+                    potential_guide_id,
+                    output_file_check,
+                )
                 results.append({
                     "input": guide_input,
-                    "guide_id": int(potential_guide_id) if potential_guide_id.isdigit() else potential_guide_id,
+                    "guide_id": (
+                        int(potential_guide_id)
+                        if potential_guide_id.isdigit()
+                        else potential_guide_id
+                    ),
                     "status": "skipped",
                     "output_file": output_file_check,
                 })
-                continue # Move to the next guide input
+                continue  # Move to the next guide input
             elif os.path.exists(output_file_check) and overwrite:
-                 logging.debug(f"File exists for guide {potential_guide_id} but overwrite is enabled.")
+                logging.debug(
+                    "File exists for guide %s but overwrite is enabled.",
+                    potential_guide_id,
+                )
         else:
-            logging.debug(f"Could not determine potential guide ID from input '{guide_input}' for pre-check.")
-        # --- End check for existing file --- 
+            logging.debug(
+                "Could not determine potential guide ID from input '%s' for pre-check.",
+                guide_input,
+            )
+        # --- End check for existing file ---
 
         url = construct_steam_guide_url(guide_input)
-        logging.info(f"Processing guide {i}/{len(guide_inputs)}: {url}")
+        logging.info("Processing guide %s/%s: %s", i, len(guide_inputs), url)
 
         try:
-            markdown_result, guide_id_scraped = scrape_steam_guide(url, retries=retries, timeout=timeout)
+            markdown_result, guide_id_scraped = scrape_steam_guide(
+                url, retries=retries, timeout=timeout
+            )
 
             if markdown_result and guide_id_scraped:
                 # Ensure guide_id is string for filename
@@ -1390,23 +1554,23 @@ def process_guide_list(
                 results.append(
                     {
                         "input": guide_input,
-                        "guide_id": guide_id_scraped, # Keep original type (int/str)
+                        "guide_id": guide_id_scraped,  # Keep original type (int/str)
                         "status": "success",
                         "output_file": output_file,
                     }
                 )
-                logging.info(f"Successfully saved guide to {output_file}")
+                logging.info("Successfully saved guide to %s", output_file)
             else:
                 results.append(
                     {
                         "input": guide_input,
-                        "guide_id": guide_id_scraped, # Keep original type (int/str)
+                        "guide_id": guide_id_scraped,  # Keep original type (int/str)
                         "status": "failed",
                         "error": "Failed to extract guide content or guide ID",
                     }
                 )
-                logging.error(f"Failed to extract content/ID from {url}")
-        except Exception as e:
+                logging.error("Failed to extract content/ID from %s", url)
+        except (OSError, ValueError, TypeError, AttributeError, LookupError) as e:
             results.append(
                 {
                     "input": guide_input,
@@ -1415,22 +1579,24 @@ def process_guide_list(
                     "error": str(e),
                 }
             )
-            logging.error(f"Error processing {url}: {e}")
+            logging.error("Error processing %s: %s", url, e)
             # Implement fail-fast logic
             if fail_fast:
                 logging.critical("Fail-fast enabled: Exiting due to error.")
-                sys.exit(1) 
+                sys.exit(1)
 
         # Apply rate limiting delay between scraping guides
         if i < len(guide_inputs):  # Don't delay after the last guide
             sleep_time = delay * (0.5 + random.random())  # Randomize delay
-            logging.debug(f"Waiting {sleep_time:.2f}s before next guide request...")
+            logging.debug("Waiting %.2fs before next guide request...", sleep_time)
             time.sleep(sleep_time)
 
     # Report summary
     successful = sum(1 for r in results if r["status"] == "success")
     logging.info(
-        f"Processing complete. {successful}/{len(guide_inputs)} guides successfully processed."
+        "Processing complete. %s/%s guides successfully processed.",
+        successful,
+        len(guide_inputs),
     )
     return results
 
@@ -1485,7 +1651,7 @@ in the YAML frontmatter of the output Markdown files.
         type=float,
         default=1.0,
         help="Minimum delay (seconds) between requests (index pages and guides). "
-        "Randomized between 50%%-150%%. Default: 1.0",
+        "Randomized between 50%-150%. Default: 1.0",
     )
     parser.add_argument(
         "-v",
@@ -1498,17 +1664,18 @@ in the YAML frontmatter of the output Markdown files.
         "--limit",
         type=int,
         default=None,
-        help="Limit the number of guides processed when using --game-id. Fetches the first X guides found."
+        help="Limit the number of guides processed when using --game-id. "
+        "Fetches the first X guides found."
     )
     parser.add_argument(
         "--overwrite",
-        action="store_true", # Default is False
+        action="store_true",  # Default is False
         help="Overwrite existing Markdown files. If not set, existing files are skipped."
     )
     parser.add_argument(
         "--retries",
         type=int,
-        default=1, # Default to 1 retry (2 total attempts)
+        default=1,  # Default to 1 retry (2 total attempts)
         metavar="N",
         help="Number of times to retry fetching a page on network errors (default: 1)."
     )
@@ -1528,7 +1695,7 @@ in the YAML frontmatter of the output Markdown files.
     )
     parser.add_argument(
         "--fail-fast",
-        action="store_true", # Default is False
+        action="store_true",  # Default is False
         help="Exit immediately if an error occurs during batch processing (--file or --game-id)."
     )
     parser.add_argument(
@@ -1537,7 +1704,8 @@ in the YAML frontmatter of the output Markdown files.
         choices=['trend', 'toprated', 'mostrecent'],
         default='trend',
         metavar="FILTER",
-        help="Sorting order for guides when using --game-id (choices: trend, toprated, mostrecent; default: trend)."
+        help="Sorting order for guides when using --game-id "
+        "(choices: trend, toprated, mostrecent; default: trend)."
     )
 
     args = parser.parse_args()
@@ -1548,7 +1716,7 @@ in the YAML frontmatter of the output Markdown files.
 
     # --- User-Agent Override ---
     if args.user_agent:
-        logging.info(f"Overriding User-Agent with: {args.user_agent}")
+        logging.info("Overriding User-Agent with: %s", args.user_agent)
         HEADERS["User-Agent"] = args.user_agent
     # --- End User-Agent Override ---
 
@@ -1557,34 +1725,36 @@ in the YAML frontmatter of the output Markdown files.
     # 1. Process guides by Game ID
     if args.game_id:
         if not args.game_id.isdigit():
-            logging.error(f"Invalid Game ID provided: '{args.game_id}'. Must be numeric.")
+            logging.error("Invalid Game ID provided: '%s'. Must be numeric.", args.game_id)
             sys.exit(1)
 
         output_dir = args.output if args.output else os.getcwd()
         # Pass the limit, sort_by, retries, timeout
         guide_ids_to_process = fetch_guide_ids_for_game(
-            args.game_id, 
-            args.delay, 
+            args.game_id,
+            args.delay,
             sort_by=args.sort_by,
-            limit=args.limit, 
+            limit=args.limit,
             retries=args.retries,
             timeout=args.timeout
         )
 
         if not guide_ids_to_process:
-            logging.warning(f"No guide IDs found for game {args.game_id}. Exiting.")
+            logging.warning("No guide IDs found for game %s. Exiting.", args.game_id)
             sys.exit(0)
 
         # Pass the overwrite, fail_fast, retries, timeout
         results = process_guide_list(
-            guide_ids_to_process, output_dir, args.delay, 
-            overwrite=args.overwrite, 
+            guide_ids_to_process,
+            output_dir,
+            args.delay,
+            overwrite=args.overwrite,
             fail_fast=args.fail_fast,
             retries=args.retries,
-            timeout=args.timeout
+            timeout=args.timeout,
         )
         if not results or all(r['status'] != 'success' for r in results):
-             sys.exit(1) # Exit with error if no guides succeeded
+            sys.exit(1)  # Exit with error if no guides succeeded
         sys.exit(0)
 
     # 3. Process single guide input
@@ -1592,7 +1762,7 @@ in the YAML frontmatter of the output Markdown files.
         url = construct_steam_guide_url(args.input)
         # Pass retries and timeout
         markdown_result, guide_id = scrape_steam_guide(
-            url, 
+            url,
             retries=args.retries,
             timeout=args.timeout
         )
@@ -1605,7 +1775,7 @@ in the YAML frontmatter of the output Markdown files.
             if not output_file:
                 if guide_id_str:
                     output_file = f"{guide_id_str}.md"
-                    logging.info(f"No output file specified, defaulting to: {output_file}")
+                    logging.info("No output file specified, defaulting to: %s", output_file)
                 else:
                     logging.error(
                         "Could not determine guide ID for default filename. Printing to console."
@@ -1614,20 +1784,20 @@ in the YAML frontmatter of the output Markdown files.
                     print(final_output)
                     sys.exit(0)  # Exit cleanly after printing
 
-            logging.info(f"Attempting to write output to file: {output_file}")
+            logging.info("Attempting to write output to file: %s", output_file)
             try:
                 # Create output directory if it doesn't exist for single file output
                 output_dir = os.path.dirname(output_file)
                 if output_dir and not os.path.exists(output_dir):
-                     os.makedirs(output_dir)
-                     logging.info(f"Created output directory: {output_dir}")
+                    os.makedirs(output_dir)
+                    logging.info("Created output directory: %s", output_dir)
 
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(final_output)
-                logging.info(f"Markdown content successfully saved to: {output_file}")
+                logging.info("Markdown content successfully saved to: %s", output_file)
                 sys.exit(0)  # Success
             except IOError as e:
-                logging.error(f"Error writing to file {output_file}: {e}")
+                logging.error("Error writing to file %s: %s", output_file, e)
                 logging.info("Printing Markdown output to console as fallback.")
                 print("\n--- Markdown Output (Fallback) ---")
                 print(final_output)
@@ -1638,17 +1808,4 @@ in the YAML frontmatter of the output Markdown files.
 
 
 if __name__ == "__main__":
-    # Check essential dependencies early
-    try:
-        import requests
-        import bs4
-        import html2text
-        import yaml
-    except ImportError as e:
-        print(
-            f"CRITICAL ERROR: Missing required library: {e.name}. Please install dependencies (e.g., pip install requests beautifulsoup4 html2text PyYAML).",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
     main()
